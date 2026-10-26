@@ -507,19 +507,21 @@ async def test_a_character_named_without_an_id_attaches_as_an_entity() -> None:
     assert committed == ("ent-sussy",)
 
 
-def test_character_references_are_served_once_the_queued_submit_is_followed() -> None:
-    """#723: the gate existed because the entity submit "produced no reply" and the run
-    timed out at 60 s. The reply does come; it is a bare ``[5]`` status with no record while
-    Flow queues and runs the job. `submit_and_observe` now follows that submit on the
-    project's status poll (see test_migrated_composer.py, "queued"), so r2v with characters
-    is served instead of refused with exit 36.
+def test_named_character_references_are_served_on_r2v() -> None:
+    """#723: the gate rested on a null entity-submit reply measured on 2026-09-07. On
+    2026-10-26 an entity-bound r2v run completed end to end through the stock observer,
+    so a named character is served. An id with no name has nothing to type into the `@`
+    picker and is refused before submit, as on the image path.
     """
     from gflow_cli.api.transports.migrated_composer import _unported_form
 
-    assert _unported_form(_r2v(reference_entities=("ent-kael",))) is None
     assert (
         _unported_form(_r2v(reference_entities=("ent-kael",), reference_entity_names=("Kael",)))
         is None
+    )
+    assert (
+        _unported_form(_r2v(reference_entities=("ent-kael",)))
+        == "a character given by entity id without a name"
     )
 
 
@@ -540,8 +542,7 @@ async def test_the_chip_count_refusal_states_the_numbers_it_compared(
     composer.send_prompt = AsyncMock()
     composer.read_chips = AsyncMock(return_value=[{"reference_type": "media"}])
     monkeypatch.setattr(mc, "MigratedComposer", lambda **_: composer)
-    # The character gate is lifted only to reach the guard it would sit behind.
-    monkeypatch.setattr(mc, "_unported_form", lambda _r: None)
+    # No `_unported_form` stub: a named character on r2v reaches the guard (#723).
 
     request = _r2v(
         reference_images=(Path("a.png"),),

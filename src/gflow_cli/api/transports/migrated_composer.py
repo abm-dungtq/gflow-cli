@@ -61,7 +61,6 @@ from gflow_cli.api.transports._common import (
 from gflow_cli.api.transports.batchexecute import (
     GenerationRecord,
     generation_record,
-    generation_records,
     image_records,
     parse_frames,
     rpc_errors,
@@ -460,17 +459,8 @@ _CLICK_POSTMORTEM_JS = r"""
 #: ligature filter that builds it, so there is nothing here to rot into a selector.
 SUBMIT_BUTTON = "the submit button (ligature 'arrow_forward')"
 
-#: The submit reply arrived 4.0–4.6 s after the click in both measured runs. The
-#: default for ``GFLOW_CLI_SUBMIT_REPLY_BUDGET_SECONDS``: a busy queue needs more (#723).
+#: The submit reply arrived 4.0–4.6 s after the click in both measured runs.
 SUBMIT_REPLY_BUDGET_S = 60.0
-
-
-def _submit_reply_budget_s() -> float:
-    from gflow_cli.config import get_settings  # noqa: PLC0415 - import cycle
-
-    return get_settings().submit_reply_budget_seconds
-
-
 # Angular enables the arrow_forward button ~100 ms after `insert_text` lands in the
 # composer (measured 2026-09-05, #670); checking it synchronously reads the stale state.
 SUBMIT_ENABLE_BUDGET_S = 5.0
@@ -591,7 +581,7 @@ def _unported_form(request: GenerateVideoRequest) -> str | None:
     2026-09-15 (scripts/dev/spike_migrated_end_frame.py): two empty chips, Start
     and End by text, and clicking the End chip opens the library picker."""
     # Character entities are a different attach surface (a chip with an entity_id, in a
-    # different wire slot) and unported. This check is MODE-INDEPENDENT and must stay
+    # different wire slot), ported for r2v only. This check is MODE-INDEPENDENT and must stay
     # ahead of every early return (#716): it used to live inside the R2V branch, so a
     # t2v request returned `None` here without its entities ever being inspected, and
     # nothing downstream attaches one — `attach_start_frame` is i2v-only,
@@ -604,13 +594,17 @@ def _unported_form(request: GenerateVideoRequest) -> str | None:
     # without consulting it — so that refusal is unreachable for exactly the accounts
     # that need it. This one is on the path every request takes.
     if request.reference_entities and request.mode is not Mode.R2V:
-        # Reference-to-video is the one mode that attaches entities (`run_video`) and
-        # counts the chips before the billed click (`read_chips`). Its submit reply
-        # carries a NULL payload (`MZZa6b -> [..., null, null, null, [5], "generic"]`,
-        # measured 2026-09-07) while Flow queues and runs the job: `submit_and_observe`
-        # now follows such a submit on the project's status poll instead of timing out
-        # (exit 9) on a generation that is actually running (#723).
         return "character references"
+    if len(request.reference_entities) > len(request.reference_entity_names):
+        # Attached by name through the `@` picker; an id alone has nothing to type, and
+        # would otherwise fail later as a confusing chip-count mismatch.
+        return "a character given by entity id without a name"
+    # R2V serves characters (#723): `run_video` attaches them through the `@` picker
+    # and `read_chips` verifies each entity chip before the billed click. The earlier
+    # refusal rested on a null submit reply (`MZZa6b -> [..., [5], "generic"]`,
+    # measured 2026-09-07) that no longer reproduces: on 2026-10-26 an entity-bound
+    # r2v run went end to end through the stock observer (exit 0). If that reply
+    # comes back, the run ends as an honest unknown outcome (exit 9), not a guess.
     if request.mode is Mode.T2V:
         return None
     if request.mode is Mode.R2V:
@@ -940,39 +934,6 @@ async def _raise_if_out_of_credits(page: Any) -> None:
 def url_rpcid(url: str) -> str | None:
     m = re.search(r"[?&]rpcids=([A-Za-z0-9]+)", url)
     return m.group(1) if m else None
-
-
-def _accepted_without_record(text: str, rpcids: tuple[str, ...]) -> bool:
-    """Did a submit reply come back as a bare-status envelope with no reason?
-
-    That is how Flow answers an entity (character) submit it queues and runs (#723):
-    ``[..., null, null, null, [5], "generic"]``. A refusal always names a reason, and
-    :func:`_submit_refusal` reads those first."""
-    return any(err.rpcid in rpcids and not err.reasons for err in rpc_errors(text))
-
-
-def _normalized_prompt(text: str) -> str:
-    return " ".join(text.split()).casefold()
-
-
-def _queued_records(
-    payload: Any, before_click: set[str], expect_prompt: str | None
-) -> list[GenerationRecord]:
-    """The records in a status frame that can be the submit Flow queued without naming.
-
-    A candidate is a workflow not seen before the click whose recorded prompt carries the
-    one this run typed. Without a prompt to match nothing is adopted: a stranger's clip
-    reported as ours is worse than the timeout this replaces."""
-    if not expect_prompt:
-        return []
-    want = _normalized_prompt(expect_prompt)
-    found: dict[str, GenerationRecord] = {}
-    for rec in generation_records(payload):
-        if rec.workflow_id in before_click or rec.prompt is None:
-            continue
-        if want in _normalized_prompt(rec.prompt):
-            found.setdefault(rec.workflow_id, rec)
-    return list(found.values())
 
 
 def body_rpcid(body: str) -> str | None:
@@ -2996,7 +2957,6 @@ class MigratedComposer:
         submit_rpcs: tuple[str, ...] = SUBMIT_RPCS,
         submit_selector: str | None = None,
         request_check: Callable[[str, str], GFlowError | None] | None = None,
-        expect_prompt: str | None = None,
     ) -> GenerationRecord:
         """Click submit, then read the page's own submit / ``jwpduf`` / ``as29s``
         replies until the record is terminal. Fires ``on_started`` as soon as the
@@ -3012,11 +2972,7 @@ class MigratedComposer:
         generation the user asked for is not the one Flow is billing. A bound end
         frame (``expect_end_media_id``) switches the submit to the interpolation
         rpc (``nprQif``), whose name travels in the ``f.req`` body rather than the
-        URL; that body must carry the interpolation key and both frame ids.
-
-        ``expect_prompt`` attributes a submit Flow queued without naming its record
-        (#723): the run then follows the project's status poll for the rest of
-        ``poll_timeout_s`` and adopts the one new workflow whose prompt carries it."""
+        URL; that body must carry the interpolation key and both frame ids."""
         loop = asyncio.get_running_loop()
         submitted: asyncio.Future[GenerationRecord] = loop.create_future()
         route_error: asyncio.Future[GFlowError] = loop.create_future()
@@ -3083,15 +3039,6 @@ class MigratedComposer:
         terminal: asyncio.Future[GenerationRecord] = loop.create_future()
         done_no_url: asyncio.Future[GenerationRecord] = loop.create_future()
         workflow: dict[str, str] = {}
-        # #723: workflows a status poll listed before the click are never ours.
-        clicked = asyncio.Event()
-        before_click: set[str] = set()
-        # Without a pre-click poll an older clip with the same prompt looks new.
-        baseline_read = asyncio.Event()
-        queued_without_record = asyncio.Event()
-        queued_why: list[str] = []
-        # Post-click polls that land before the queued signal or the baseline.
-        pending_status: list[tuple[str, Any]] = []
 
         def _settle(rec: GenerationRecord) -> None:
             if rec.is_failed or (rec.is_done and rec.video_url):
@@ -3107,9 +3054,6 @@ class MigratedComposer:
         seen_submit_rpcs: set[str] = set()
 
         async def on_response(response: Any) -> None:
-            # Read before the body await: a poll that lands before the click is the
-            # baseline even if its body resolves after it (#723).
-            pre_click = not clicked.is_set()
             url = str(getattr(response, "url", ""))
             rpcid = url_rpcid(url) if "batchexecute" in url else None
             if rpcid is not None:
@@ -3125,25 +3069,11 @@ class MigratedComposer:
                 text = await response.text()
             except Exception:  # noqa: BLE001 - an aborted/streamed body is not our frame
                 # #1009/#1010: Chrome can drop a reply body. On the submit reply that
-                # loses the workflow id. With a prompt to match, the clip is then followed
-                # on the status poll like a submit Flow queued without a record (#723,
-                # live 2026-10-26: MZZa6b body lost, clip rendering in the grid).
-                # The nprQif reply comes on a bare URL; its request named the RPC.
-                submit_rpc = rpcid or (
-                    INTERPOLATION_SUBMIT_RPC
-                    if INTERPOLATION_SUBMIT_RPC in submit_rpcs
-                    and INTERPOLATION_SUBMIT_RPC in seen_submit_rpcs
-                    else None
-                )
-                if submit_rpc in submit_rpcs and not submitted.done() and expect_prompt:
-                    queued_why.append("its reply body was unreadable")
-                    queued_without_record.set()
-                    log.info("migrated.submit_reply_unreadable_following_status", rpc=submit_rpc)
-                    _drain_pending_status()
-                elif submit_rpc in submit_rpcs and not submitted.done():
+                # loses the workflow id, so no status reply can settle the run either.
+                if rpcid in submit_rpcs and not submitted.done():
                     submitted.set_exception(
                         _outcome_unknown(
-                            f"migrated host: the {submit_rpc} submit reply arrived but its "
+                            f"migrated host: the {rpcid} submit reply arrived but its "
                             "body was unreadable"
                         )
                     )
@@ -3154,11 +3084,6 @@ class MigratedComposer:
             if refusal is not None and not submitted.done():
                 submitted.set_exception(refusal)
                 return
-            if not submitted.done() and _accepted_without_record(text, submit_rpcs):
-                queued_why.append("its reply named no record")
-                queued_without_record.set()
-                log.info("migrated.submit_accepted_without_record", rpcs=sorted(submit_rpcs))
-                _drain_pending_status()
             for rid, payload in parse_frames(text):
                 # Record the id the FRAME names, not just the URL's. The interpolation
                 # reply arrives on a bare `batchexecute` with no `rpcids` param, so a
@@ -3188,48 +3113,6 @@ class MigratedComposer:
                         continue
                     log.info("migrated.status", rpc=rid, status=rec.status, bytes=rec.size_bytes)
                     _settle(rec)
-                elif rid in STATUS_RPCS and pre_click:
-                    before_click.update(r.workflow_id for r in generation_records(payload))
-                    baseline_read.set()
-                    _drain_pending_status()
-                elif rid in STATUS_RPCS and not submitted.done():
-                    pending_status.append((rid, payload))
-                    _drain_pending_status()
-
-        def _drain_pending_status() -> None:
-            if submitted.done():
-                pending_status.clear()
-                return
-            if not (queued_without_record.is_set() and baseline_read.is_set()):
-                return
-            while pending_status and not submitted.done():
-                _adopt_queued(*pending_status.pop(0))
-
-        def _adopt_queued(rid: str, payload: Any) -> None:
-            if submitted.done() or not baseline_read.is_set():
-                return
-            found = _queued_records(payload, before_click, expect_prompt)
-            if len(found) > 1:
-                submitted.set_exception(
-                    _outcome_unknown(
-                        f"migrated host: the submit named no readable record (#723), and "
-                        f"{len(found)} new clips on {rid} carry this prompt"
-                    )
-                )
-                return
-            if not found:
-                return
-            rec = found[0]
-            workflow["id"] = rec.workflow_id
-            log.info(
-                "migrated.submit_adopted_from_status",
-                rpc=rid,
-                workflow_id=rec.workflow_id,
-                media_id=rec.media_id,
-                status=rec.status,
-            )
-            submitted.set_result(rec)
-            _settle(rec)
 
         page.on("response", on_response)
         # Every body assertion lives in `on_request`, so the listener must be armed for
@@ -3276,45 +3159,18 @@ class MigratedComposer:
             deadline = time.monotonic() + poll_timeout_s
             # The credit-spending click: a bare timeout here leaves "did it submit?"
             # unanswerable, which is the worst place in this driver to lose attribution.
-            clicked.set()
             await self._click(page, submit, named=SUBMIT_BUTTON, timeout=5000)
             log.info("migrated.submit_clicked")
-            budget = min(_submit_reply_budget_s(), poll_timeout_s)
+            budget = min(SUBMIT_REPLY_BUDGET_S, poll_timeout_s)
             await asyncio.wait(
                 {submitted, route_error}, timeout=budget, return_when=asyncio.FIRST_COMPLETED
             )
-            if (
-                queued_without_record.is_set()
-                and expect_prompt
-                and baseline_read.is_set()
-                and not (submitted.done() or route_error.done())
-            ):
-                # #723: the job is in Flow's queue; follow it for the rest of the run.
-                await asyncio.wait(
-                    {submitted, route_error},
-                    timeout=max(deadline - time.monotonic(), 0.0),
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
             if route_error.done():
                 # The request is inspected before its reply lands, so a wrong body is
                 # named as such and not as whatever the reply then says.
                 raise route_error.result()
             if not submitted.done():
                 seen = ", ".join(sorted(seen_submit_rpcs)) or "none"
-                if queued_without_record.is_set():
-                    if not expect_prompt:
-                        why = "there is no prompt to match a status record against"
-                    elif not baseline_read.is_set():
-                        why = "no status poll before the click tells a new clip from an old one"
-                    else:
-                        why = (
-                            f"no status record carrying this prompt appeared within "
-                            f"{poll_timeout_s:.0f}s"
-                        )
-                    raise _outcome_unknown(
-                        f"migrated host: the {'/'.join(submit_rpcs)} submit was sent but "
-                        f"{queued_why[0]} (#723), and {why} (rpcs seen: {seen})"
-                    )
                 raise _outcome_unknown(
                     f"migrated host: no {'/'.join(submit_rpcs)} reply within "
                     f"{budget:.0f}s of clicking submit (rpcs seen: {seen})"
@@ -3852,7 +3708,6 @@ async def run_video(
         expect_media_id=media_id,
         expect_end_media_id=end_media_id,
         expect_reference_ids=reference_ids,
-        expect_prompt=request.prompt,
     )
     status = VideoStatus(
         media_id=record.media_id,

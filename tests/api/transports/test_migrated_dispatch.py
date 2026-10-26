@@ -335,7 +335,8 @@ async def test_run_video_refuses_character_references_outside_r2v() -> None:
         await _run(_req(mode=Mode.T2V, reference_entities=("ent-1",)))
     from gflow_cli.api.transports.migrated_composer import _unported_form
 
-    assert _unported_form(_req(mode=Mode.R2V, reference_entities=("ent-1",))) is None
+    named = _req(mode=Mode.R2V, reference_entities=("ent-1",), reference_entity_names=("Kael",))
+    assert _unported_form(named) is None
     # I2V is absent from that loop on purpose, and the reason is worth pinning: the DTO
     # itself refuses the combination (`_validate_i2v_symmetry`, api/video.py), so an i2v
     # request carrying entities cannot be constructed at all. Broadening the gate to every

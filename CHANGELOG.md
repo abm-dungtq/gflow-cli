@@ -9,21 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Character references on flow.google.com video no longer end as exit 9**
-  ([#723](https://github.com/ffroliva/gflow-cli/issues/723)). Flow queues and runs an
-  entity-bound reference-to-video submit, but its submit reply carries no record (a bare
-  `[5]` status), so the run waited 60 s for a media id that never came and reported a
-  timeout while the clip finished in the project. The observer now follows such a submit on
-  the project's own status poll for the rest of the poll timeout and adopts the one new
-  workflow whose recorded prompt carries the run's prompt; two candidates are an unknown
-  outcome (exit 9, not retryable), never a guess. A clip is adopted only when a status poll
-  ran before the click, so an older clip with the same prompt is never taken for the new
-  one. Any migrated video run with a prompt whose submit reply body Chrome lost
-  ([#1009](https://github.com/ffroliva/gflow-cli/issues/1009)) is followed the same way
-  instead of ending at once as exit 9. Reference-to-video with `--character` is
-  therefore served on the migrated host; text-to-video with a character stays refused
-  (exit 36). The submit reply wait is configurable with
-  `GFLOW_CLI_SUBMIT_REPLY_BUDGET_SECONDS` (default 60).
+- **Reference-to-video with a character now runs on flow.google.com**
+  ([#723](https://github.com/ffroliva/gflow-cli/issues/723)). Local-file `video r2v` with
+  `--reference-entity` paired with `--reference-entity-name` is served on the migrated host:
+  the character is attached through the composer's `@` picker and its chip is verified
+  before the billed submit. The refusal rested on a null submit reply measured on
+  2026-09-07; on 2026-10-26 an entity-bound r2v run completed end to end through the stock
+  observer. An entity id without a name now exits 36 with that reason instead of failing
+  later on a chip-count mismatch. Text-to-video with a character stays refused (exit 36,
+  [#716](https://github.com/ffroliva/gflow-cli/issues/716)).
 - **MCP `wait=false` generations now run**
   ([#1097](https://github.com/ffroliva/gflow-cli/issues/1097)). Before, `gflow_generate_image`
   and `gflow_generate_video` with `wait=false` saved the job and returned a `task_id`, but no

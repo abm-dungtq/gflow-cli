@@ -52,9 +52,6 @@ class GenerationRecord:
     video_url: str | None = None
     poster_url: str | None = None
     size_bytes: int | None = None
-    #: ``DETAILS[1]``: the prompt Flow recorded for the clip. Only used to attribute a
-    #: queued record to a submit whose reply named none (#723).
-    prompt: str | None = None
 
     @property
     def is_done(self) -> bool:
@@ -277,23 +274,9 @@ def generation_record(
             route=f"batchexecute:{rpcid}",
             discovery={"rpcid": rpcid, "payload_head": _discovery_head(payload)},
         )
-    return _decode_record(rec)
-
-
-def generation_records(payload: Any) -> list[GenerationRecord]:
-    """Every generation record in one frame's payload, in document order.
-
-    A ``jwpduf`` poll is project-wide, so it can list several clips. A submit whose reply
-    named no record (#723) is attributed by reading all of them, not just the first.
-    """
-    return [_decode_record(node) for node in _walk_lists(payload) if _is_record(node)]
-
-
-def _decode_record(rec: list[Any]) -> GenerationRecord:
     status_cell = _as_list(_at(rec, 5, 8))
     status: Any = status_cell[0] if status_cell else None
     size: Any = _at(rec, 5, 13)
-    prompt: Any = _at(rec, 5, 1)
     return GenerationRecord(
         workflow_id=rec[0],
         project_id=rec[1],
@@ -302,7 +285,6 @@ def _decode_record(rec: list[Any]) -> GenerationRecord:
         video_url=_url(_at(rec, 7, 0, 8)),
         poster_url=_url(_at(rec, 5, 10)),
         size_bytes=size if isinstance(size, int) else None,
-        prompt=prompt if isinstance(prompt, str) else None,
     )
 
 

@@ -531,19 +531,6 @@ class Settings(BaseSettings):
             "Override via GFLOW_CLI_LEASE_WAIT_SECONDS."
         ),
     )
-    submit_reply_budget_seconds: float = Field(
-        default=60.0,
-        gt=0.0,
-        le=3600.0,
-        description=(
-            "Seconds the migrated flow.google.com video path waits for the submit reply "
-            "after the (billed) click before reporting the outcome as unknown (exit 9). "
-            "A submit Flow accepts without naming a record (#723) is then followed on the "
-            "project's own status poll for the rest of the run's poll timeout. Raise it "
-            "when Flow's queue is slow (Flow allows five concurrent generations). "
-            "Override via GFLOW_CLI_SUBMIT_REPLY_BUDGET_SECONDS."
-        ),
-    )
     headless: bool = Field(
         default=False,
         description=(
