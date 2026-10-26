@@ -50,3 +50,22 @@
   `generate_plugin_skills.py --check`), ruff, format and `pyright src` are all green.
   `pytest -n 4` over `tests/mcp tests/api tests/features tests/worker` and the doc and config
   tests: **2726 passed, 6 skipped**. Each merged PR's head ran the full suite in CI.
+- `scripts/ci/check_release_artifacts.py`: OK. Its first run failed this ledger for listing
+  SEP-2663 over HTTP as "not run" with no blocker, which was correct. The check was then run
+  live (the `gflow serve` row above) instead of being labelled.
+- `/gflow:doc-review`:
+  - Mechanical pass (sections 1–7) clean, apart from findings that predate this release:
+    older ledgers are not listed in INDEX.
+  - The council returned YELLOW from all three auditors (completeness, cross-reference,
+    drift), with no RED and no Tier 1 finding. Their 9 Tier 2 findings are fixed in the
+    release-prep commit:
+    - `docs/MCP.md` now lists the two new exit-25 causes, says what happens to jobs queued
+      by v0.90.0, and mentions `ttlMs: null`;
+    - `config.py`, `.env.template` and `CONFIGURATION.md` now say the unreadable-video case
+      is "not approved", not "rejected";
+    - the old lead sentence in KNOWN_ISSUES is corrected;
+    - the gate counts and their CI order now agree across AGENTS, CONTRIBUTING, DEVELOPMENT
+      and `skills/check`.
+  - Shipped plans removed: `2026-10-25-mcp-wait-false-runs`, `2026-10-26-mcp-tasks-sep2663`,
+    `2026-10-26-agent-only-gate-count`.
+  - Reports are at `tmp/council/0{1,2,3}-*.md` (local only).

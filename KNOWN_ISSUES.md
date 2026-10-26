@@ -1416,8 +1416,9 @@ aspect / model / count are Agent-settings **defaults** rather than per-request c
 Agent settings, saves, sends a natural-language request to the agent, and **restores those
 three defaults afterwards**. "Confirm before generating" follows
 [`GFLOW_CLI_AGENT_CONFIRM`](docs/CONFIGURATION.md#gflow_cli_agent_confirm) and is not restored.
-With a confirmation step, gflow approves exactly one that its own submit produced and stops
-without approving a second. Live-verified 2026-09-15 on a Google AI Pro account (`en`):
+With a confirmation step, gflow reads the count of the one its own submit produced, approves
+it only when that count is within the request, and stops without approving a second (see
+the confirmation bullet below, #988). Live-verified 2026-09-15 on a Google AI Pro account (`en`):
 t2i 3:4 × 2 (896×1200 each), t2v 4 s 9:16 (ready 69 s after submit, MP4 downloaded).
 
 **Not driven yet on this composer** (exit 36, before anything is clicked): image-to-image,

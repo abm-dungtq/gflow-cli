@@ -118,7 +118,10 @@ The server registers three protocol surfaces:
 > retry. **The job lives only as long as the server**: when the client closes a stdio
 > server, or `gflow serve` stops, running jobs are cancelled and recorded the same way.
 > A server killed outright leaves its row `processing` — see
-> [Known issues](https://github.com/ffroliva/gflow-cli/blob/main/KNOWN_ISSUES.md).
+> [Known issues](https://github.com/ffroliva/gflow-cli/blob/main/KNOWN_ISSUES.md). Jobs
+> queued with `wait=false` by v0.90.0 or earlier were never run and are not picked up now:
+> they stay `pending`, and `tasks/cancel` clears them. `tasks/get` sends `ttlMs: null`,
+> because gflow keeps task rows with no expiry.
 
 
 * `gflow_auth_status(profile)`: Credit-free, non-interactive Flow session probe (#497) — wraps the same fail-closed `verify_flow_profile` check as `gflow auth status`. Returns `{"status": "authenticated", "profile", "user_email"}` or a problem-details error with a `remediation_hint`; a `verification_error` outcome (HTTP 503, `retryable: true`) means a network/endpoint problem, which re-login does not fix, and a `profile_marker_missing` outcome (HTTP 409, `retryable: false`, #796) means the profile lost its `.gflow_browser_strategy` marker so its cookies cannot be read — a retry does not help, and neither does a plain `gflow auth login`; re-run `gflow auth login --browser chrome` for that profile. A `cookie_store_unreadable` outcome (HTTP 409, `retryable: false`, #796) means the profile's Chrome cookie database is corrupt or unreadable — a local file fault, not the network; close any Chrome window using that profile, then re-run `gflow auth login` for it. Any other unauthenticated outcome is a dead session (HTTP 401). Call it before a generation tool to fail fast on dead auth, before a long blocking generation call. Login/logout remain CLI-only (genuinely interactive).
@@ -186,7 +189,10 @@ landed on `/about` again, on the account's own project with a healthy session �
 doomed and costs ~35 s each ([#756](https://github.com/ffroliva/gflow-cli/issues/756)). The
 second is the migrated **agent-only composer** ([#799](https://github.com/ffroliva/gflow-cli/issues/799)),
 which gflow drives through its chat agent: there `FlowAgentUiError` carries `retryable: false`
-because it means the agent did something other than what was asked — a second credit
+because it means the agent did something other than what was asked — a credit
+confirmation quoting more than requested (gflow rejects it, nothing is approved;
+[#988](https://github.com/ffroliva/gflow-cli/issues/988)), a video confirmation whose count
+gflow cannot read (not approved, and left open in Flow for you to reject), a second credit
 confirmation, more results than requested, or an image turn that made nothing (a video turn
 that makes nothing ends in `TransportTimeoutError`, also `retryable: false` there, since the
 request was already sent) — and a blind re-run repeats the ask. Its `detail` may include the
