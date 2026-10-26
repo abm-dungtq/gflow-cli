@@ -3090,6 +3090,8 @@ class MigratedComposer:
         baseline_read = asyncio.Event()
         queued_without_record = asyncio.Event()
         queued_why: list[str] = []
+        # Post-click polls that land before the queued signal or the baseline.
+        pending_status: list[tuple[str, Any]] = []
 
         def _settle(rec: GenerationRecord) -> None:
             if rec.is_failed or (rec.is_done and rec.video_url):
@@ -3126,14 +3128,22 @@ class MigratedComposer:
                 # loses the workflow id. With a prompt to match, the clip is then followed
                 # on the status poll like a submit Flow queued without a record (#723,
                 # live 2026-10-26: MZZa6b body lost, clip rendering in the grid).
-                if rpcid in submit_rpcs and not submitted.done() and expect_prompt:
+                # The nprQif reply comes on a bare URL; its request named the RPC.
+                submit_rpc = rpcid or (
+                    INTERPOLATION_SUBMIT_RPC
+                    if INTERPOLATION_SUBMIT_RPC in submit_rpcs
+                    and INTERPOLATION_SUBMIT_RPC in seen_submit_rpcs
+                    else None
+                )
+                if submit_rpc in submit_rpcs and not submitted.done() and expect_prompt:
                     queued_why.append("its reply body was unreadable")
                     queued_without_record.set()
-                    log.info("migrated.submit_reply_unreadable_following_status", rpc=rpcid)
-                elif rpcid in submit_rpcs and not submitted.done():
+                    log.info("migrated.submit_reply_unreadable_following_status", rpc=submit_rpc)
+                    _drain_pending_status()
+                elif submit_rpc in submit_rpcs and not submitted.done():
                     submitted.set_exception(
                         _outcome_unknown(
-                            f"migrated host: the {rpcid} submit reply arrived but its "
+                            f"migrated host: the {submit_rpc} submit reply arrived but its "
                             "body was unreadable"
                         )
                     )
@@ -3148,6 +3158,7 @@ class MigratedComposer:
                 queued_why.append("its reply named no record")
                 queued_without_record.set()
                 log.info("migrated.submit_accepted_without_record", rpcs=sorted(submit_rpcs))
+                _drain_pending_status()
             for rid, payload in parse_frames(text):
                 # Record the id the FRAME names, not just the URL's. The interpolation
                 # reply arrives on a bare `batchexecute` with no `rpcids` param, so a
@@ -3180,8 +3191,19 @@ class MigratedComposer:
                 elif rid in STATUS_RPCS and pre_click:
                     before_click.update(r.workflow_id for r in generation_records(payload))
                     baseline_read.set()
-                elif rid in STATUS_RPCS and queued_without_record.is_set():
-                    _adopt_queued(rid, payload)
+                    _drain_pending_status()
+                elif rid in STATUS_RPCS and not submitted.done():
+                    pending_status.append((rid, payload))
+                    _drain_pending_status()
+
+        def _drain_pending_status() -> None:
+            if submitted.done():
+                pending_status.clear()
+                return
+            if not (queued_without_record.is_set() and baseline_read.is_set()):
+                return
+            while pending_status and not submitted.done():
+                _adopt_queued(*pending_status.pop(0))
 
         def _adopt_queued(rid: str, payload: Any) -> None:
             if submitted.done() or not baseline_read.is_set():

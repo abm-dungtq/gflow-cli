@@ -3925,3 +3925,60 @@ async def test_an_unreadable_submit_body_with_no_match_names_the_lost_body() -> 
             page, poll_timeout_s=0.3, on_started=None, project_id=PROJ, expect_prompt="a crane"
         )
     assert ei.value.retryable is False
+
+
+async def test_a_status_poll_before_the_queued_reply_is_still_adopted() -> None:
+    """The project poll can land after the click but before the bare submit reply:
+    it is kept and scanned once the submit is known to be queued."""
+    page = _baseline_page()
+    page.scripted_responses = [
+        (
+            _batch_url("jwpduf"),
+            _frame("jwpduf", [None, 881, [[_queued_record(WF_NEW, 6, prompt="a crane")]]]),
+        ),
+        (_batch_url("MZZa6b"), _null_submit()),
+        (
+            _batch_url("as29s"),
+            _frame("as29s", _queued_record(WF_NEW, 3, prompt="a crane", url=VIDEO_URL)),
+        ),
+    ]
+    with capture_logs() as logs:
+        rec = await migrated_composer.MigratedComposer().submit_and_observe(
+            page, poll_timeout_s=2.0, on_started=None, project_id=PROJ, expect_prompt="a crane"
+        )
+    assert rec.workflow_id == WF_NEW and rec.is_done
+    adopted = next(e for e in logs if e["event"] == "migrated.submit_adopted_from_status")
+    assert adopted["rpc"] == "jwpduf"
+
+
+async def test_a_lost_interpolation_body_on_a_bare_url_is_followed() -> None:
+    """The nprQif reply has no `rpcids` param; its lost body is still the submit's."""
+    end = "77777777-7777-4777-8777-777777777778"
+    body = (
+        f'f.req=[[["nprQif","[\\"omni_flash_i2v_8s_first_last\\",\\"{MEDIA_UP}\\",'
+        f'\\"{end}\\"]",null,"generic"]]]'
+    )
+    page = _baseline_page()
+    page.scripted_request = ("nprQif", body)
+    page.scripted_responses = [
+        (_batch_bare_url(), LOST_BODY),
+        (
+            _batch_url("as29s"),
+            _frame("as29s", _queued_record(WF_NEW, 3, prompt="a crane", url=VIDEO_URL)),
+        ),
+    ]
+    with capture_logs() as logs:
+        rec = await migrated_composer.MigratedComposer().submit_and_observe(
+            page,
+            poll_timeout_s=2.0,
+            on_started=None,
+            project_id=PROJ,
+            expect_media_id=MEDIA_UP,
+            expect_end_media_id=end,
+            expect_prompt="a crane",
+        )
+    assert rec.workflow_id == WF_NEW and rec.is_done
+    following = next(
+        e for e in logs if e["event"] == "migrated.submit_reply_unreadable_following_status"
+    )
+    assert following["rpc"] == "nprQif"
