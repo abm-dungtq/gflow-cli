@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.91.0] — 2026-10-26
+
 ### Fixed
 
 - **A video whose submit reply Chrome lost now finishes with its clip on flow.google.com**
@@ -6726,7 +6728,8 @@ shell-script template that branches on these codes.
 
 First skeleton. Not functional end-to-end yet.
 
-[Unreleased]: https://github.com/ffroliva/gflow-cli/compare/v0.90.0...HEAD
+[Unreleased]: https://github.com/ffroliva/gflow-cli/compare/v0.91.0...HEAD
+[0.91.0]: https://github.com/ffroliva/gflow-cli/compare/v0.90.0...v0.91.0
 [0.90.0]: https://github.com/ffroliva/gflow-cli/compare/v0.89.1...v0.90.0
 [0.89.1]: https://github.com/ffroliva/gflow-cli/compare/v0.89.0...v0.89.1
 [0.89.0]: https://github.com/ffroliva/gflow-cli/compare/v0.88.0...v0.89.0
