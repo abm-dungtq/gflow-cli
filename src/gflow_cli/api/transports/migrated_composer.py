@@ -3086,6 +3086,8 @@ class MigratedComposer:
         # #723: workflows a status poll listed before the click are never ours.
         clicked = asyncio.Event()
         before_click: set[str] = set()
+        # Without a pre-click poll an older clip with the same prompt looks new.
+        baseline_read = asyncio.Event()
         queued_without_record = asyncio.Event()
         queued_why: list[str] = []
 
@@ -3103,6 +3105,9 @@ class MigratedComposer:
         seen_submit_rpcs: set[str] = set()
 
         async def on_response(response: Any) -> None:
+            # Read before the body await: a poll that lands before the click is the
+            # baseline even if its body resolves after it (#723).
+            pre_click = not clicked.is_set()
             url = str(getattr(response, "url", ""))
             rpcid = url_rpcid(url) if "batchexecute" in url else None
             if rpcid is not None:
@@ -3172,13 +3177,14 @@ class MigratedComposer:
                         continue
                     log.info("migrated.status", rpc=rid, status=rec.status, bytes=rec.size_bytes)
                     _settle(rec)
-                elif rid in STATUS_RPCS and not clicked.is_set():
+                elif rid in STATUS_RPCS and pre_click:
                     before_click.update(r.workflow_id for r in generation_records(payload))
+                    baseline_read.set()
                 elif rid in STATUS_RPCS and queued_without_record.is_set():
                     _adopt_queued(rid, payload)
 
         def _adopt_queued(rid: str, payload: Any) -> None:
-            if submitted.done():
+            if submitted.done() or not baseline_read.is_set():
                 return
             found = _queued_records(payload, before_click, expect_prompt)
             if len(found) > 1:
@@ -3255,7 +3261,12 @@ class MigratedComposer:
             await asyncio.wait(
                 {submitted, route_error}, timeout=budget, return_when=asyncio.FIRST_COMPLETED
             )
-            if queued_without_record.is_set() and not (submitted.done() or route_error.done()):
+            if (
+                queued_without_record.is_set()
+                and expect_prompt
+                and baseline_read.is_set()
+                and not (submitted.done() or route_error.done())
+            ):
                 # #723: the job is in Flow's queue; follow it for the rest of the run.
                 await asyncio.wait(
                     {submitted, route_error},
@@ -3269,10 +3280,18 @@ class MigratedComposer:
             if not submitted.done():
                 seen = ", ".join(sorted(seen_submit_rpcs)) or "none"
                 if queued_without_record.is_set():
+                    if not expect_prompt:
+                        why = "there is no prompt to match a status record against"
+                    elif not baseline_read.is_set():
+                        why = "no status poll before the click tells a new clip from an old one"
+                    else:
+                        why = (
+                            f"no status record carrying this prompt appeared within "
+                            f"{poll_timeout_s:.0f}s"
+                        )
                     raise _outcome_unknown(
                         f"migrated host: the {'/'.join(submit_rpcs)} submit was sent but "
-                        f"{queued_why[0]} (#723), and no status record carrying this prompt "
-                        f"appeared within {poll_timeout_s:.0f}s (rpcs seen: {seen})"
+                        f"{queued_why[0]} (#723), and {why} (rpcs seen: {seen})"
                     )
                 raise _outcome_unknown(
                     f"migrated host: no {'/'.join(submit_rpcs)} reply within "

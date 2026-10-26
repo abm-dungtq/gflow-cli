@@ -312,6 +312,7 @@ class FakeLocator:
 
     async def is_enabled(self) -> bool:
         if self.kind == "submit":
+            await asyncio.sleep(0)  # let pre-click responses land, as a real page would
             dom = self.page.dom
             if dom.submit_enable_after_reads > 0:
                 dom.submit_enable_after_reads -= 1
@@ -582,6 +583,7 @@ class FakePage:
         # (url, text) or (url, text, http_status) — the status defaults to 200, so an
         # existing 2-tuple keeps working and a non-200 reply is expressible.
         self.scripted_responses: list[tuple[str, ...]] = []  # fired on submit click
+        self.pre_click_responses: list[tuple[str, str]] = []  # fired once a listener is armed
         self.scripted_request: tuple[str | None, str] | None = (
             None  # (rpcid, body); None = bare URL
         )
@@ -592,6 +594,9 @@ class FakePage:
 
     def on(self, event: str, handler: Any) -> None:
         self._handlers[event].append(handler)
+        if event == "response":
+            for url, text in self.pre_click_responses:
+                asyncio.get_event_loop().create_task(_maybe_await(handler(FakeResponse(url, text))))
 
     def remove_listener(self, event: str, handler: Any) -> None:
         self._handlers[event] = [h for h in self._handlers[event] if h is not handler]
@@ -3667,6 +3672,7 @@ async def test_upload_readback_that_proves_nothing_keeps_the_unknown_outcome(
 
 WF_NEW = "77777777-7777-4777-8777-777777777777"
 WF_OTHER = "88888888-8888-4888-8888-888888888888"
+WF_OLD = "66666666-6666-4666-8666-666666666666"
 MEDIA_NEW = "99999999-9999-4999-8999-999999999999"
 
 
@@ -3685,11 +3691,23 @@ def _null_submit(rpcid: str = "MZZa6b") -> str:
     return ")]}'\n\n10\n" + json.dumps(frame) + "\n"
 
 
+def _baseline_page() -> FakePage:
+    """A page whose status poll ran before the click, listing an older clip."""
+    page = FakePage()
+    page.dom.prompt = "a crane"
+    page.pre_click_responses = [
+        (
+            _batch_url("jwpduf"),
+            _frame("jwpduf", [None, 881, [[_queued_record(WF_OLD, 2, prompt="a heron")]]]),
+        )
+    ]
+    return page
+
+
 async def test_a_queued_entity_submit_is_followed_on_the_status_poll() -> None:
     """The submit reply names no record, yet Flow runs the job: adopt the one new
     workflow whose prompt carries ours instead of timing out with exit 9."""
-    page = FakePage()
-    page.dom.prompt = "a crane"
+    page = _baseline_page()
     page.scripted_responses = [
         (_batch_url("MZZa6b"), _null_submit()),
         (
@@ -3729,8 +3747,7 @@ async def test_a_queued_entity_submit_is_followed_on_the_status_poll() -> None:
 
 
 async def test_two_new_clips_with_our_prompt_are_an_unknown_outcome_not_a_guess() -> None:
-    page = FakePage()
-    page.dom.prompt = "a crane"
+    page = _baseline_page()
     page.scripted_responses = [
         (_batch_url("MZZa6b"), _null_submit()),
         (
@@ -3755,7 +3772,9 @@ async def test_two_new_clips_with_our_prompt_are_an_unknown_outcome_not_a_guess(
     assert ei.value.retryable is False
 
 
-async def test_a_queued_submit_is_never_adopted_without_a_prompt_to_match() -> None:
+async def test_a_queued_submit_is_never_adopted_without_a_prompt_to_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     page = FakePage()
     page.dom.prompt = "a crane"
     page.scripted_responses = [
@@ -3765,11 +3784,39 @@ async def test_a_queued_submit_is_never_adopted_without_a_prompt_to_match() -> N
             _frame("jwpduf", [None, 881, [[_queued_record(WF_NEW, 6, prompt="x")]]]),
         ),
     ]
-    with pytest.raises(TransportTimeoutError, match="named no record") as ei:
+    monkeypatch.setattr(migrated_composer, "_submit_reply_budget_s", lambda: 0.05)
+    t0 = time.monotonic()
+    with pytest.raises(TransportTimeoutError, match="no prompt to match") as ei:
         await migrated_composer.MigratedComposer().submit_and_observe(
-            page, poll_timeout_s=0.3, on_started=None, project_id=PROJ
+            page, poll_timeout_s=5.0, on_started=None, project_id=PROJ
         )
     assert ei.value.retryable is False
+    # Nothing can be adopted, so the run does not wait out the poll timeout.
+    assert time.monotonic() - t0 < 2.0
+
+
+async def test_a_queued_submit_is_never_adopted_without_a_pre_click_poll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No status poll before the click: an older clip with the same prompt would look
+    new, so the outcome stays unknown instead of adopting it."""
+    page = FakePage()
+    page.dom.prompt = "a crane"
+    page.scripted_responses = [
+        (_batch_url("MZZa6b"), _null_submit()),
+        (
+            _batch_url("jwpduf"),
+            _frame("jwpduf", [None, 881, [[_queued_record(WF_NEW, 2, prompt="a crane")]]]),
+        ),
+    ]
+    monkeypatch.setattr(migrated_composer, "_submit_reply_budget_s", lambda: 0.05)
+    t0 = time.monotonic()
+    with pytest.raises(TransportTimeoutError, match="no status poll before the click") as ei:
+        await migrated_composer.MigratedComposer().submit_and_observe(
+            page, poll_timeout_s=5.0, on_started=None, project_id=PROJ, expect_prompt="a crane"
+        )
+    assert ei.value.retryable is False
+    assert time.monotonic() - t0 < 2.0
 
 
 async def test_a_queued_submit_waits_past_the_reply_budget_for_its_record(
@@ -3777,8 +3824,7 @@ async def test_a_queued_submit_waits_past_the_reply_budget_for_its_record(
 ) -> None:
     """The reply budget bounds the wait for a reply; a queued job gets the poll timeout."""
     monkeypatch.setattr(migrated_composer, "_submit_reply_budget_s", lambda: 0.05)
-    page = FakePage()
-    page.dom.prompt = "a crane"
+    page = _baseline_page()
     page.scripted_responses = [(_batch_url("MZZa6b"), _null_submit())]
     loop = asyncio.get_running_loop()
 
@@ -3854,8 +3900,7 @@ def test_a_refusal_envelope_is_not_a_queued_submit() -> None:
 async def test_an_unreadable_submit_body_is_followed_when_there_is_a_prompt() -> None:
     """Live 2026-10-26 (r2v + character, omni-flash): Chrome lost the MZZa6b body while the
     clip rendered in the grid. With a prompt to match, follow it instead of exit 9."""
-    page = FakePage()
-    page.dom.prompt = "a crane"
+    page = _baseline_page()
     page.scripted_responses = [
         (_batch_url("MZZa6b"), LOST_BODY),
         (

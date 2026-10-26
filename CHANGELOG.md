@@ -16,7 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timeout while the clip finished in the project. The observer now follows such a submit on
   the project's own status poll for the rest of the poll timeout and adopts the one new
   workflow whose recorded prompt carries the run's prompt; two candidates are an unknown
-  outcome (exit 9, not retryable), never a guess. Reference-to-video with `--character` is
+  outcome (exit 9, not retryable), never a guess. A clip is adopted only when a status poll
+  ran before the click, so an older clip with the same prompt is never taken for the new
+  one. Any migrated video run with a prompt whose submit reply body Chrome lost
+  ([#1009](https://github.com/ffroliva/gflow-cli/issues/1009)) is followed the same way
+  instead of ending at once as exit 9. Reference-to-video with `--character` is
   therefore served on the migrated host; text-to-video with a character stays refused
   (exit 36). The submit reply wait is configurable with
   `GFLOW_CLI_SUBMIT_REPLY_BUDGET_SECONDS` (default 60).
