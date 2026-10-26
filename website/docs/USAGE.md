@@ -739,8 +739,7 @@ Options:
 > are not ported to the migrated composer yet; `r2v` takes a character with
 > `--reference-entity` paired with `--reference-entity-name` (#723). `image t2i` and local-file `image i2i` also run on a moved
 > account, and on images a character can be tagged with `@Name` or `--reference-entity`
-> (see [REFERENCE_STRATEGIES § flow.google.com](REFERENCE_STRATEGIES.md#on-flowgooglecom-images-only-723);
-> video is unchanged). An image `--ref <uuid>` is referenced in place, with no upload, when the
+> (see [REFERENCE_STRATEGIES § flow.google.com](REFERENCE_STRATEGIES.md#on-flowgooglecom-images-and-video-r2v-723)). An image `--ref <uuid>` is referenced in place, with no upload, when the
 > local catalog records that image in the same `--project` and keeps its Flow caption
 > ([#995](https://github.com/ffroliva/gflow-cli/issues/995)); any other UUID, and instruction/Imagen-4
 > image forms, still exit 36. `flow.google.com` forces the migrated composer,

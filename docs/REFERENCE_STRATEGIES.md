@@ -79,7 +79,7 @@ Notes:
   fails fast with a clear exit-11 message naming the Phase-3 limitation — no silent drop, no wasted
   credit.
 
-## On flow.google.com (images only, #723)
+## On flow.google.com (images and video r2v, #723)
 
 On an account Flow serves from `flow.google.com`, `image t2i` and `image i2i` take a character
 mention (`@Name` or `--reference-entity`) through the composer's own `@` picker. **Video:**
