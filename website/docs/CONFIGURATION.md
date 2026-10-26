@@ -322,6 +322,14 @@ Until the #1041 fix this setting was ignored and every command logged at `INFO` 
 **Note:** Same-process contention always fails fast regardless of this setting — the holder is the same process, so waiting would deadlock. See [KNOWN_ISSUES § Same profile can't be used in parallel](../KNOWN_ISSUES.md#same-profile-cant-be-used-in-parallel).
 **Shipped in:** #478; MCP default #864.
 
+### `GFLOW_CLI_SUBMIT_REPLY_BUDGET_SECONDS`
+
+**What:** How long a video run on the migrated `flow.google.com` host waits for the submit reply after the (billed) click before reporting the outcome as unknown (`TransportTimeoutError`, exit 9, not retryable). When Flow accepts a submit without naming its record (the reference-to-video `--character` case, #723), the run instead follows the project's own status poll for the rest of its poll timeout and adopts the one new clip whose recorded prompt carries the run's prompt.
+**Values:** `>0`–`3600` seconds (fractions allowed)
+**Default:** `60`
+**Note:** Raise it when Flow's queue is slow: Flow documents five concurrent generations per account and throttles after heavy daily use.
+**Shipped in:** #723.
+
 ### `GFLOW_CLI_DB_PATH`
 
 **What:** Override the path to the local SQLite operations database.

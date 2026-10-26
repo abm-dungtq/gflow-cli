@@ -507,22 +507,19 @@ async def test_a_character_named_without_an_id_attaches_as_an_entity() -> None:
     assert committed == ("ent-sussy",)
 
 
-def test_character_references_are_still_refused_until_a_submit_completes() -> None:
-    """The attach half is ported and proven; the submit half is not, so the gate stays.
-
-    `attach_character_entities` is verified live — the chip commits with the right
-    entity_id and Flow loads the character's voice — but the submit that follows produced
-    no reply in three runs. Until an entity-bound generation actually completes, refusing
-    instantly (exit 36) beats a 60-second timeout, so the gate must NOT be relaxed just
-    because the attach works. This test is the thing that stops that happening by
-    accident.
+def test_character_references_are_served_once_the_queued_submit_is_followed() -> None:
+    """#723: the gate existed because the entity submit "produced no reply" and the run
+    timed out at 60 s. The reply does come; it is a bare ``[5]`` status with no record while
+    Flow queues and runs the job. `submit_and_observe` now follows that submit on the
+    project's status poll (see test_migrated_composer.py, "queued"), so r2v with characters
+    is served instead of refused with exit 36.
     """
     from gflow_cli.api.transports.migrated_composer import _unported_form
 
-    assert _unported_form(_r2v(reference_entities=("ent-kael",))) is not None
+    assert _unported_form(_r2v(reference_entities=("ent-kael",))) is None
     assert (
         _unported_form(_r2v(reference_entities=("ent-kael",), reference_entity_names=("Kael",)))
-        is not None
+        is None
     )
 
 

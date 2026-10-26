@@ -312,13 +312,13 @@ async def test_run_video_rejects_modes_not_yet_ported_with_exit_36() -> None:
     # nothing to anchor the pick on and nothing to assert on the submit body.
     with pytest.raises(FlowHostMigratedError, match="by name"):
         await _run(_req(mode=Mode.R2V, ref_names=("asset",)))
-    with pytest.raises(FlowHostMigratedError, match="character references"):
-        await _run(_req(mode=Mode.R2V, reference_entities=("ent-1",)))
 
 
-async def test_run_video_refuses_character_references_on_every_mode() -> None:
+async def test_run_video_refuses_character_references_outside_r2v() -> None:
     """#716: the refusal was behind the R2V branch, so t2v carried an entity into a
-    BILLED generation that never attached it.
+    BILLED generation that never attached it. R2V is served since #723: it attaches the
+    entities and counts the chips before the click, and its null submit reply is
+    followed on the status poll.
 
     T2V returned early from ``_unported_form`` before ``reference_entities`` was ever
     inspected, and nothing downstream attaches one — ``attach_start_frame`` is i2v-only,
@@ -331,9 +331,11 @@ async def test_run_video_refuses_character_references_on_every_mode() -> None:
     without consulting it — so the refusal was unreachable for exactly the accounts
     that needed it.
     """
-    for mode in (Mode.T2V, Mode.R2V):
-        with pytest.raises(FlowHostMigratedError, match="character references"):
-            await _run(_req(mode=mode, reference_entities=("ent-1",)))
+    with pytest.raises(FlowHostMigratedError, match="character references"):
+        await _run(_req(mode=Mode.T2V, reference_entities=("ent-1",)))
+    from gflow_cli.api.transports.migrated_composer import _unported_form
+
+    assert _unported_form(_req(mode=Mode.R2V, reference_entities=("ent-1",))) is None
     # I2V is absent from that loop on purpose, and the reason is worth pinning: the DTO
     # itself refuses the combination (`_validate_i2v_symmetry`, api/video.py), so an i2v
     # request carrying entities cannot be constructed at all. Broadening the gate to every

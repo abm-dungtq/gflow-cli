@@ -3661,3 +3661,222 @@ async def test_upload_readback_that_proves_nothing_keeps_the_unknown_outcome(
     with patch.object(FakeFileChooser, "set_files", fail_upload):
         with pytest.raises(RpcResponseUnavailableError, match="body was unavailable"):
             await migrated_composer.MigratedComposer().upload(page, PROJ_UUID, _png(tmp_path))
+
+
+# --- #723: a submit Flow queues without naming its record -----------------------------
+
+WF_NEW = "77777777-7777-4777-8777-777777777777"
+WF_OTHER = "88888888-8888-4888-8888-888888888888"
+MEDIA_NEW = "99999999-9999-4999-8999-999999999999"
+
+
+def _queued_record(
+    workflow_id: str, status: int, *, prompt: str, url: str | None = None
+) -> list[Any]:
+    rec = _record(status, url)
+    rec[0], rec[2] = workflow_id, MEDIA_NEW
+    rec[5][1] = prompt
+    return rec
+
+
+def _null_submit(rpcid: str = "MZZa6b") -> str:
+    """The measured entity-submit reply (2026-09-07): a bare status, no payload."""
+    frame = [["wrb.fr", rpcid, None, None, None, [5], "generic"]]
+    return ")]}'\n\n10\n" + json.dumps(frame) + "\n"
+
+
+async def test_a_queued_entity_submit_is_followed_on_the_status_poll() -> None:
+    """The submit reply names no record, yet Flow runs the job: adopt the one new
+    workflow whose prompt carries ours instead of timing out with exit 9."""
+    page = FakePage()
+    page.dom.prompt = "a crane"
+    page.scripted_responses = [
+        (_batch_url("MZZa6b"), _null_submit()),
+        (
+            _batch_url("jwpduf"),
+            _frame(
+                "jwpduf",
+                [
+                    None,
+                    881,
+                    [
+                        [_queued_record(WF_OTHER, 2, prompt="a heron")],
+                        [_queued_record(WF_NEW, 6, prompt="@Ernesto  A Crane at dawn")],
+                    ],
+                ],
+            ),
+        ),
+        (
+            _batch_url("as29s"),
+            _frame("as29s", _queued_record(WF_NEW, 3, prompt="a crane at dawn", url=VIDEO_URL)),
+        ),
+    ]
+    started: list[Any] = []
+    with capture_logs() as logs:
+        rec = await migrated_composer.MigratedComposer().submit_and_observe(
+            page,
+            poll_timeout_s=2.0,
+            on_started=started.append,
+            project_id=PROJ,
+            expect_prompt="a  crane at dawn",
+        )
+    assert rec.is_done and rec.video_url == VIDEO_URL
+    assert rec.workflow_id == WF_NEW and rec.media_id == MEDIA_NEW
+    assert started and started[0].workflow_id == WF_NEW
+    events = [entry["event"] for entry in logs]
+    assert "migrated.submit_accepted_without_record" in events
+    assert "migrated.submit_adopted_from_status" in events
+
+
+async def test_two_new_clips_with_our_prompt_are_an_unknown_outcome_not_a_guess() -> None:
+    page = FakePage()
+    page.dom.prompt = "a crane"
+    page.scripted_responses = [
+        (_batch_url("MZZa6b"), _null_submit()),
+        (
+            _batch_url("jwpduf"),
+            _frame(
+                "jwpduf",
+                [
+                    None,
+                    881,
+                    [
+                        [_queued_record(WF_OTHER, 6, prompt="a crane")],
+                        [_queued_record(WF_NEW, 6, prompt="a crane")],
+                    ],
+                ],
+            ),
+        ),
+    ]
+    with pytest.raises(TransportTimeoutError, match="2 new clips") as ei:
+        await migrated_composer.MigratedComposer().submit_and_observe(
+            page, poll_timeout_s=1.0, on_started=None, project_id=PROJ, expect_prompt="a crane"
+        )
+    assert ei.value.retryable is False
+
+
+async def test_a_queued_submit_is_never_adopted_without_a_prompt_to_match() -> None:
+    page = FakePage()
+    page.dom.prompt = "a crane"
+    page.scripted_responses = [
+        (_batch_url("MZZa6b"), _null_submit()),
+        (
+            _batch_url("jwpduf"),
+            _frame("jwpduf", [None, 881, [[_queued_record(WF_NEW, 6, prompt="x")]]]),
+        ),
+    ]
+    with pytest.raises(TransportTimeoutError, match="named no record") as ei:
+        await migrated_composer.MigratedComposer().submit_and_observe(
+            page, poll_timeout_s=0.3, on_started=None, project_id=PROJ
+        )
+    assert ei.value.retryable is False
+
+
+async def test_a_queued_submit_waits_past_the_reply_budget_for_its_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reply budget bounds the wait for a reply; a queued job gets the poll timeout."""
+    monkeypatch.setattr(migrated_composer, "_submit_reply_budget_s", lambda: 0.05)
+    page = FakePage()
+    page.dom.prompt = "a crane"
+    page.scripted_responses = [(_batch_url("MZZa6b"), _null_submit())]
+    loop = asyncio.get_running_loop()
+
+    def late_poll() -> None:
+        page._fire_response(  # pyright: ignore[reportPrivateUsage]
+            FakeResponse(
+                _batch_url("as29s"),
+                _frame("as29s", _queued_record(WF_NEW, 3, prompt="a crane", url=VIDEO_URL)),
+            )
+        )
+
+    loop.call_later(0.3, late_poll)
+    rec = await migrated_composer.MigratedComposer().submit_and_observe(
+        page, poll_timeout_s=2.0, on_started=None, project_id=PROJ, expect_prompt="a crane"
+    )
+    assert rec.workflow_id == WF_NEW and rec.is_done
+
+
+async def test_the_reply_budget_comes_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(migrated_composer, "_submit_reply_budget_s", lambda: 0.05)
+    page = FakePage()
+    page.dom.prompt = "a crane"
+    page.scripted_responses = []
+    t0 = time.monotonic()
+    with pytest.raises(TransportTimeoutError, match="reply within 0s"):
+        await migrated_composer.MigratedComposer().submit_and_observe(
+            page, poll_timeout_s=5.0, on_started=None, project_id=PROJ
+        )
+    assert time.monotonic() - t0 < 2.0
+
+
+def test_the_reply_budget_setting_reads_its_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    from gflow_cli.config import Settings
+
+    assert Settings().submit_reply_budget_seconds == migrated_composer.SUBMIT_REPLY_BUDGET_S
+    monkeypatch.setenv("GFLOW_CLI_SUBMIT_REPLY_BUDGET_SECONDS", "180")
+    assert Settings().submit_reply_budget_seconds == 180.0
+
+
+def test_workflows_polled_before_the_click_are_never_adopted() -> None:
+    payload = [
+        None,
+        881,
+        [
+            [_queued_record(WF_OTHER, 2, prompt="a crane")],
+            [_queued_record(WF_NEW, 6, prompt="A crane")],
+        ],
+    ]
+    found = migrated_composer._queued_records(payload, {WF_OTHER}, "a crane")  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+    assert [r.workflow_id for r in found] == [WF_NEW]
+    assert migrated_composer._queued_records(payload, set(), None) == []  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+
+
+def test_a_refusal_envelope_is_not_a_queued_submit() -> None:
+    refused = [
+        [
+            "wrb.fr",
+            "MZZa6b",
+            None,
+            None,
+            None,
+            [7, None, [["type.googleapis.com/google.rpc.ErrorInfo", ["SOME_REASON"]]]],
+            "generic",
+        ]
+    ]
+    text = ")]}'\n\n10\n" + json.dumps(refused) + "\n"
+    accepted = migrated_composer._accepted_without_record  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+    assert accepted(text, ("MZZa6b",)) is False
+    assert accepted(_null_submit(), ("MZZa6b",)) is True
+    assert accepted(_null_submit("other"), ("MZZa6b",)) is False
+
+
+async def test_an_unreadable_submit_body_is_followed_when_there_is_a_prompt() -> None:
+    """Live 2026-10-26 (r2v + character, omni-flash): Chrome lost the MZZa6b body while the
+    clip rendered in the grid. With a prompt to match, follow it instead of exit 9."""
+    page = FakePage()
+    page.dom.prompt = "a crane"
+    page.scripted_responses = [
+        (_batch_url("MZZa6b"), LOST_BODY),
+        (
+            _batch_url("as29s"),
+            _frame("as29s", _queued_record(WF_NEW, 3, prompt="a crane", url=VIDEO_URL)),
+        ),
+    ]
+    with capture_logs() as logs:
+        rec = await migrated_composer.MigratedComposer().submit_and_observe(
+            page, poll_timeout_s=2.0, on_started=None, project_id=PROJ, expect_prompt="a crane"
+        )
+    assert rec.workflow_id == WF_NEW and rec.is_done
+    assert "migrated.submit_reply_unreadable_following_status" in [e["event"] for e in logs]
+
+
+async def test_an_unreadable_submit_body_with_no_match_names_the_lost_body() -> None:
+    page = FakePage()
+    page.dom.prompt = "a crane"
+    page.scripted_responses = [(_batch_url("MZZa6b"), LOST_BODY)]
+    with pytest.raises(TransportTimeoutError, match="reply body was unreadable") as ei:
+        await migrated_composer.MigratedComposer().submit_and_observe(
+            page, poll_timeout_s=0.3, on_started=None, project_id=PROJ, expect_prompt="a crane"
+        )
+    assert ei.value.retryable is False
