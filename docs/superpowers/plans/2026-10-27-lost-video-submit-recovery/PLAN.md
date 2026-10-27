@@ -80,15 +80,15 @@ submitted request carries any of the given ids.
 Fixtures are cut from the spike's own frames, redacted.
 
 **Steps:**
-- [ ] Red tests, then `generation_records_carrying`. Reuse `_at`, `_as_list` and the
+- [x] Red tests, then `generation_records_carrying`. Reuse `_at`, `_as_list` and the
       record-shape walk that `find_record` already uses.
 
 **Tests (red first):**
-- [ ] A payload holding an older done clip and our new clip returns only ours (row 1)
-- [ ] The uploaded image's own record (length 7, status null) is never returned (row 2)
-- [ ] A record carrying our id only in the prompt text, not in the request refs, is not
+- [x] A payload holding an older done clip and our new clip returns only ours (row 1)
+- [x] The uploaded image's own record (length 7, status null) is never returned (row 2)
+- [x] A record carrying our id only in the prompt text, not in the request refs, is not
       returned
-- [ ] An empty `ids` argument returns `[]`
+- [x] An empty `ids` argument returns `[]`
 
 ---
 
@@ -100,34 +100,34 @@ carries an adopted id, and the run continues as though the reply had been read.
 **Files:** `migrated_composer.py`, `tests/api/transports/test_migrated_composer.py`.
 
 **Steps:**
-- [ ] Add a keyword parameter `adopt_ids: tuple[str, ...] = ()`. `run_video` passes
+- [x] Add a keyword parameter `adopt_ids: tuple[str, ...] = ()`. `run_video` passes
       `reference_ids` (uploaded refs only; never `entity_ids`) plus the uploaded start
       frame. Extend and other callers pass nothing, so their behaviour is unchanged
       (row 20).
-- [ ] On a lost submit body with `adopt_ids`, log `migrated.video_submit_reply_lost` and
+- [x] On a lost submit body with `adopt_ids`, log `migrated.video_submit_reply_lost` and
       do not fail `submitted`. Without `adopt_ids`, keep today's immediate exit 9.
-- [ ] Status branch: when `lost` holds and no workflow is known, call the matcher.
+- [x] Status branch: when `lost` holds and no workflow is known, call the matcher.
   - One match: set `workflow["id"]`, `submitted.set_result(rec)`, `_settle(rec)`, and log
     `migrated.video_adopted_from_status` (rpc, media_id, matched_on).
   - More than one: `submitted.set_exception(_outcome_unknown(...))` naming the media ids,
     and log `migrated.video_recovery_ambiguous`.
-- [ ] The unresolved path (`not submitted.done()` at the budget) names the project URL in
+- [x] The unresolved path (`not submitted.done()` at the budget) names the project URL in
       the detail.
-- [ ] Budget: once `lost` is set, the submit wait extends to the poll deadline. It is not
+- [x] Budget: once `lost` is set, the submit wait extends to the poll deadline. It is not
       `SUBMIT_REPLY_BUDGET_S`.
 
 **Tests (red first):**
-- [ ] Lost body, then a status reply with an older clip and our clip: our clip is
+- [x] Lost body, then a status reply with an older clip and our clip: our clip is
       adopted, `on_started` fires once with its ids, and the result is ours (rows 1, 5, 11)
-- [ ] Lost body, then our record at status 4: the normal failed-generation result, not
+- [x] Lost body, then our record at status 4: the normal failed-generation result, not
       exit 9 (row 7)
-- [ ] Lost body, then two records carrying our id: exit 9, non-retryable, both media ids
+- [x] Lost body, then two records carrying our id: exit 9, non-retryable, both media ids
       in the detail (row 3)
-- [ ] Lost body, no `adopt_ids` (t2v): exit 9 immediately, as today
-- [ ] Lost body, no status match before the deadline: exit 9 naming the project (row 10)
-- [ ] No second submit click in any of these (row 4): the click mock is called once
-- [ ] A lost **status** body is skipped and the next poll settles it (row 15)
-- [ ] Logged events carry no request body (row 12)
+- [x] Lost body, no `adopt_ids` (t2v): exit 9 immediately, as today
+- [x] Lost body, no status match before the deadline: exit 9 naming the project (row 10)
+- [x] No second submit click in any of these (row 4): the click mock is called once
+- [x] A lost **status** body is skipped and the next poll settles it (row 15)
+- [x] Logged events carry no request body (row 12)
 
 ---
 
@@ -139,11 +139,11 @@ bound from `tests/e2e/test_migrated_submit_body_loss_bdd.py`, which already prov
 loss with `Response.text` and counts submits.
 
 **Steps:**
-- [ ] Scenario: "An r2v submit whose reply body is lost still delivers its clip". Then:
+- [x] Scenario: "An r2v submit whose reply body is lost still delivers its clip". Then:
       exactly one video submit, the clip on disk, success. Run it through the CLI
       subprocess and through `mcp_tools.gflow_generate_video(wait=True)`.
-- [ ] Keep the t2v scenario as is: it now pins the narrowed scope.
-- [ ] `tests/features/test_e2e_binding_guard.py` stays green.
+- [x] Keep the t2v scenario as is: it now pins the narrowed scope.
+- [x] `tests/features/test_e2e_binding_guard.py` stays green.
 
 ---
 
@@ -154,21 +154,21 @@ loss with `Response.text` and counts submits.
 done match, download it through the caller's path. Otherwise raise exit 9.
 
 **Steps:**
-- [ ] Reuse `migrated_extend.find_record` / `LISTING_RPC` and the second-tab read pattern
+- [x] Reuse `migrated_extend.find_record` / `LISTING_RPC` and the second-tab read pattern
       from `migrated_recover`. Close the tab in `finally`; the generating page never
       navigates (row 19).
-- [ ] Log `migrated.video_adopted_from_listing`.
+- [x] Log `migrated.video_adopted_from_listing`.
 
 **Tests:**
-- [ ] Integration (mocked pages): status bodies are also lost, the listing has our record,
+- [x] Integration (mocked pages): status bodies are also lost, the listing has our record,
       and the run is adopted (row 8)
-- [ ] The second tab is created only after the submit click (row 9: order assertion)
+- [x] The second tab is created only after the submit click (row 9: order assertion)
 
 ---
 
 ## Task 5: console line
 
-- [ ] On `migrated.video_submit_reply_lost`, print one console line: the submit reply was
+- [x] On `migrated.video_submit_reply_lost`, print one console line: the submit reply was
       lost, and gflow is following the clip in the project (row 18). It must not use Rich
       markup that would eat brackets.
 
@@ -176,24 +176,36 @@ done match, download it through the caller's path. Otherwise raise exit 9.
 
 ## Task 6: MCP twin (verify, no new surface)
 
-- [ ] Check the six mirror axes from `skills/check/SKILL.md` step 1b. No parameter, payload
+- [x] Check the six mirror axes from `skills/check/SKILL.md` step 1b. No parameter, payload
       key or leaf changes, so expect none.
-- [ ] Queued path: the worker row gets the adopted workflow id through `on_started` (row
+- [x] Queued path: the worker row gets the adopted workflow id through `on_started` (row
       14). Integration test against `worker/codec.py` round trip, or name the existing one
       that covers it.
-- [ ] Update the `gflow_generate_video` docstring if it promises "exit 9 on a lost reply".
+- [x] Update the `gflow_generate_video` docstring if it promises "exit 9 on a lost reply".
 
 ---
 
 ## Task 7: docs
 
-- [ ] `KNOWN_ISSUES.md:853`: add video submits and #1112 to *Affects*; say that r2v and i2v
+- [x] `KNOWN_ISSUES.md:853`: add video submits and #1112 to *Affects*; say that r2v and i2v
       with an uploaded file recover, and t2v does not yet.
-- [ ] `docs/MCP.md:195-198` and `skills/gflow-cli/SKILL.md:278`: the same split. Then
+- [x] `docs/MCP.md:195-198` and `skills/gflow-cli/SKILL.md:278`: the same split. Then
       `generate_plugin_skills.py` to refresh the plugin copy.
-- [ ] `CHANGELOG.md` `[Unreleased]` → Fixed.
+- [x] `CHANGELOG.md` `[Unreleased]` → Fixed.
 
 ---
+
+## As built (2026-10-27)
+
+- Task 4's fallback runs after the 60 s submit-reply budget, not at the poll deadline, so a
+  listing match still leaves the generating page time to report the clip done.
+- Task 5 needed no new console code: the lost-reply event is a WARNING, which the default
+  log level already prints as one line; it gained a readable `note`.
+- Task 6: no parameter, payload key or leaf changed, so the six axes reduce to docs. The
+  queued path gets the adopted ids through the worker's own `on_started`
+  (`worker/daemon.py`), which the observer fires on adoption exactly as on a read reply.
+- Row 4 (one submit) is pinned by the e2e's reply count; offline, the observer has one
+  click call and no retry loop.
 
 ## Task 8: gates and the paid proof
 
