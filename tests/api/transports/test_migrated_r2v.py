@@ -616,3 +616,6 @@ async def test_the_submit_body_must_carry_the_committed_characters(
     )
     kwargs = composer.submit_and_observe.await_args.kwargs
     assert kwargs["expect_reference_ids"] == expected
+    # #1112: only this run's uploads identify the clip after a lost reply; the entity id
+    # repeats in every clip that cast the character, so it must never be an adopt key.
+    assert kwargs["adopt_ids"] == uploaded

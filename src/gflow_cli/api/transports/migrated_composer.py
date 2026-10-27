@@ -61,6 +61,7 @@ from gflow_cli.api.transports._common import (
 from gflow_cli.api.transports.batchexecute import (
     GenerationRecord,
     generation_record,
+    generation_records_carrying,
     image_records,
     parse_frames,
     rpc_errors,
@@ -2957,6 +2958,7 @@ class MigratedComposer:
         submit_rpcs: tuple[str, ...] = SUBMIT_RPCS,
         submit_selector: str | None = None,
         request_check: Callable[[str, str], GFlowError | None] | None = None,
+        adopt_ids: tuple[str, ...] = (),
     ) -> GenerationRecord:
         """Click submit, then read the page's own submit / ``jwpduf`` / ``as29s``
         replies until the record is terminal. Fires ``on_started`` as soon as the
@@ -2972,7 +2974,11 @@ class MigratedComposer:
         generation the user asked for is not the one Flow is billing. A bound end
         frame (``expect_end_media_id``) switches the submit to the interpolation
         rpc (``nprQif``), whose name travels in the ``f.req`` body rather than the
-        URL; that body must carry the interpolation key and both frame ids."""
+        URL; that body must carry the interpolation key and both frame ids.
+
+        ``adopt_ids`` are media ids this run uploaded. When Chrome loses the submit reply
+        body (#1112), the status poll whose record carries one of them is adopted as the
+        submit; such an id exists in no older clip, so no other clip can match."""
         loop = asyncio.get_running_loop()
         submitted: asyncio.Future[GenerationRecord] = loop.create_future()
         route_error: asyncio.Future[GFlowError] = loop.create_future()
@@ -3039,6 +3045,8 @@ class MigratedComposer:
         terminal: asyncio.Future[GenerationRecord] = loop.create_future()
         done_no_url: asyncio.Future[GenerationRecord] = loop.create_future()
         workflow: dict[str, str] = {}
+        # The submit rpc whose reply body was lost, while a status poll may still name it.
+        lost: dict[str, str] = {}
 
         def _settle(rec: GenerationRecord) -> None:
             if rec.is_failed or (rec.is_done and rec.video_url):
@@ -3046,6 +3054,31 @@ class MigratedComposer:
                     terminal.set_result(rec)
             elif rec.is_done and not done_no_url.done():
                 done_no_url.set_result(rec)
+
+        def _adopt(rid: str, payload: Any) -> None:
+            carrying = generation_records_carrying(rid, payload, adopt_ids)
+            matches = {r.workflow_id: r for r in carrying}
+            if len(matches) > 1:
+                ids = ", ".join(sorted(r.media_id for r in matches.values()))
+                log.warning("migrated.video_recovery_ambiguous", rpc=rid, media_ids=ids)
+                submitted.set_exception(
+                    _outcome_unknown(
+                        f"migrated host: the {lost['rpc']} submit reply body was lost and "
+                        f"{len(matches)} clips carry this run's upload ({ids})"
+                    )
+                )
+            elif matches:
+                (rec,) = matches.values()
+                workflow["id"] = rec.workflow_id
+                log.info(
+                    "migrated.video_adopted_from_status",
+                    rpc=rid,
+                    workflow_id=rec.workflow_id,
+                    media_id=rec.media_id,
+                    status=rec.status,
+                )
+                submitted.set_result(rec)
+                _settle(rec)
 
         # Every batchexecute rpcid seen while waiting for the submit reply. A
         # start+end submit may answer on an rpcid this observer does not watch;
@@ -3070,7 +3103,10 @@ class MigratedComposer:
             except Exception:  # noqa: BLE001 - an aborted/streamed body is not our frame
                 # #1009/#1010: Chrome can drop a reply body. On the submit reply that
                 # loses the workflow id, so no status reply can settle the run either.
-                if rpcid in submit_rpcs and not submitted.done():
+                if rpcid in submit_rpcs and not submitted.done() and adopt_ids:
+                    lost["rpc"] = rpcid
+                    log.warning("migrated.video_submit_reply_lost", rpc=rpcid)
+                elif rpcid in submit_rpcs and not submitted.done():
                     submitted.set_exception(
                         _outcome_unknown(
                             f"migrated host: the {rpcid} submit reply arrived but its "
@@ -3106,6 +3142,8 @@ class MigratedComposer:
                     )
                     submitted.set_result(rec)
                     _settle(rec)
+                elif rid in STATUS_RPCS and lost and not workflow and not submitted.done():
+                    _adopt(rid, payload)
                 elif rid in STATUS_RPCS and workflow:
                     try:
                         rec = generation_record(rid, payload, workflow_id=workflow["id"])
@@ -3165,10 +3203,24 @@ class MigratedComposer:
             await asyncio.wait(
                 {submitted, route_error}, timeout=budget, return_when=asyncio.FIRST_COMPLETED
             )
+            if lost and not submitted.done() and not route_error.done():
+                # The clip is being made; a status poll may still name it before the deadline.
+                await asyncio.wait(
+                    {submitted, route_error},
+                    timeout=max(0.0, deadline - time.monotonic()),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
             if route_error.done():
                 # The request is inspected before its reply lands, so a wrong body is
                 # named as such and not as whatever the reply then says.
                 raise route_error.result()
+            if not submitted.done() and lost:
+                where = MIGRATED_PROJECT_URL.format(project_id=project_id) if project_id else "Flow"
+                raise _outcome_unknown(
+                    f"migrated host: the {lost['rpc']} submit reply arrived but its body was "
+                    f"unreadable, and no status reply named a clip carrying this run's upload "
+                    f"within {poll_timeout_s:.0f}s; it may still finish in {where}"
+                )
             if not submitted.done():
                 seen = ", ".join(sorted(seen_submit_rpcs)) or "none"
                 raise _outcome_unknown(
@@ -3711,6 +3763,9 @@ async def run_video(
         # The committed entity ids ride the MZZa6b body beside the media ids (route-abort
         # capture, 2026-10-27), so a character-only run is guarded too.
         expect_reference_ids=reference_ids + entity_ids,
+        # Only ids uploaded by THIS run identify its clip after a lost reply (#1112);
+        # a character's entity id repeats in every clip that cast it.
+        adopt_ids=tuple(i for i in (media_id, end_media_id) if i) + reference_ids,
     )
     status = VideoStatus(
         media_id=record.media_id,

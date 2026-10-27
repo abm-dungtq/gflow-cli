@@ -1860,6 +1860,99 @@ async def test_an_unreadable_video_submit_body_is_named_and_not_retryable() -> N
     assert "project" in ei.value.remediation_hint
 
 
+#: #1112: a clip whose run uploaded MEDIA_UP, as a poll lists it after a lost submit.
+WF_OURS = "77777777-7777-4777-8777-777777777777"
+MEDIA_OURS = "88888888-8888-4888-8888-888888888888"
+
+
+def _ours(status: int, url: str | None = None, *, wf: str = WF_OURS) -> list[Any]:
+    rec = _record(status, url)
+    rec[0], rec[2] = wf, MEDIA_OURS if wf == WF_OURS else wf
+    rec[5][6] = [None, [["abra_r2v_8s", 3], [[None, 4, MEDIA_UP]]]]
+    return rec
+
+
+async def _observe_lost(
+    responses: list[tuple[str, ...]], *, poll_timeout_s: float = 2.0
+) -> tuple[Any, list[Any]]:
+    from gflow_cli.api.transports.migrated_composer import MigratedComposer
+
+    page = FakePage()
+    page.dom.prompt = "a crane"
+    page.scripted_responses = [(_batch_url("YhhmEf"), LOST_BODY), *responses]
+    started: list[Any] = []
+    rec = await MigratedComposer().submit_and_observe(
+        page,
+        poll_timeout_s=poll_timeout_s,
+        on_started=started.append,
+        project_id=PROJ,
+        adopt_ids=(MEDIA_UP,),
+    )
+    return rec, started
+
+
+async def test_a_lost_submit_reply_adopts_the_clip_carrying_our_upload_1112() -> None:
+    """Spike 2026-10-27: after a lost MZZa6b body the next poll listed an older clip of the
+    project beside ours. Only ours carries the id this run uploaded."""
+    rec, started = await _observe_lost(
+        [
+            (
+                _batch_url("jwpduf"),
+                _frame("jwpduf", [None, 881, [[_record(3, VIDEO_URL)], [_ours(2)]]]),
+            ),
+            (_batch_url("as29s"), _frame("as29s", _ours(3, VIDEO_URL))),
+        ]
+    )
+    assert rec.workflow_id == WF_OURS and rec.is_done and rec.video_url == VIDEO_URL
+    assert [(s.media_id, s.workflow_id) for s in started] == [(MEDIA_OURS, WF_OURS)]
+
+
+async def test_an_adopted_clip_that_fails_is_a_failed_generation_not_exit_9_1112() -> None:
+    rec, started = await _observe_lost(
+        [(_batch_url("jwpduf"), _frame("jwpduf", [None, 881, [[_ours(4)]]]))]
+    )
+    assert rec.is_failed and rec.workflow_id == WF_OURS and len(started) == 1
+
+
+async def test_two_clips_carrying_our_upload_are_refused_not_guessed_1112() -> None:
+    from gflow_cli.errors import is_retryable
+
+    other = "99999999-9999-4999-8999-999999999999"
+    with pytest.raises(TransportTimeoutError) as ei:
+        await _observe_lost(
+            [
+                (
+                    _batch_url("jwpduf"),
+                    _frame("jwpduf", [None, 881, [[_ours(2)], [_ours(2, wf=other)]]]),
+                )
+            ]
+        )
+    assert MEDIA_OURS in ei.value.detail and other in ei.value.detail
+    assert not is_retryable(ei.value)
+
+
+async def test_a_lost_reply_with_no_matching_poll_names_the_project_1112() -> None:
+    from gflow_cli.errors import is_retryable
+
+    with pytest.raises(TransportTimeoutError) as ei:
+        await _observe_lost(
+            [(_batch_url("jwpduf"), _frame("jwpduf", [None, 881, [[_record(3, VIDEO_URL)]]]))],
+            poll_timeout_s=0.5,
+        )
+    assert "unreadable" in ei.value.detail and f"/project/{PROJ}" in ei.value.detail
+    assert not is_retryable(ei.value)
+
+
+async def test_a_lost_status_body_is_skipped_and_the_next_poll_adopts_1112() -> None:
+    rec, _ = await _observe_lost(
+        [
+            (_batch_url("jwpduf"), LOST_BODY),
+            (_batch_url("as29s"), _frame("as29s", _ours(3, VIDEO_URL))),
+        ]
+    )
+    assert rec.workflow_id == WF_OURS and rec.is_done
+
+
 async def test_a_generation_not_terminal_in_time_is_not_retryable() -> None:
     """#1010: the poll ran out after the clip was submitted. That is where the spike
     found the clip finished and billed, so a re-run must not be invited."""
