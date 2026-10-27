@@ -493,6 +493,9 @@ gflow image i2i "make it cinematic, golden hour" --ref hero.png
 # Two refs, both by path
 gflow image i2i "blend these two compositions" --ref a.png --ref b.png
 
+# Named local refs (@cuong -> "reference image 1", @dep -> "reference image 2" by stem)
+gflow image i2i "@cuong holding @dep" --ref cuong=nv-cuong.jpg --ref dep.jpg
+
 # Already-uploaded asset by UUID
 gflow image i2i "stylize this asset" --ref ddb6ef97-262d-49f4-8269-4a28c0fae6a2
 
@@ -2059,6 +2062,12 @@ reference cap; `ref` and `refs` cannot both be set on the same row):
   magic-byte-corrected suffix) and is a valid image, the row is marked `RESUMED` and skipped
   even without `--project`; if all rows in the config are already satisfied on disk, `gflow run`
   exits `0` without opening Chrome.
+- **Named local references (`@name` -> `reference image N`).** A local file in `ref` or `refs`
+  may be passed as `{"name": "cuong", "path": "nv-tieu-cuong.png"}` (or a plain path string,
+  whose default name is the filename stem, e.g. `dep-to-ong.png` -> `dep-to-ong`). Any whole-word,
+  case-insensitive `@<name>` in the row's prompt is replaced locally with `reference image N`
+  (1-based in the row's reference order) before submission; mentioning a name two references
+  share is refused with `ConfigurationError` (exit 11).
 - **A failed upload** fails that row with the reason; a later row naming the same file
   tries the upload again.
 - **Measured on flow.google.com** (2026-10-01). When Flow serves the project from labs,

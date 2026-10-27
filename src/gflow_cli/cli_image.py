@@ -116,6 +116,11 @@ from gflow_cli.image_batch import (
 )
 from gflow_cli.paths import image_output_path, resolve_batch_output_dir
 from gflow_cli.profile_store import account_locale_for
+from gflow_cli.ref_aliases import (
+    default_ref_name,
+    replace_ref_aliases,
+    split_cli_ref,
+)
 from gflow_cli.services import catalog_sync
 from gflow_cli.services.reference_uploads import generate_reusing_uploads
 from gflow_cli.storage import cloud_info_from_path
@@ -1742,6 +1747,7 @@ class _I2IParams:
     tool: AppliedTool | None = None
     instructions: tuple[AgentInstruction, ...] | None = None
     ui_mode: UiMode | None = None
+    ref_aliases: tuple[str | None, ...] = ()
 
 
 @image.command(
@@ -1871,7 +1877,12 @@ def i2i(  # NOSONAR
     # click.UsageError on missing/broken paths, which Click maps to exit 2.
     # Click's `multiple=True` with `required=True` already rejects the
     # "no --ref" case with exit 2 before we get here.
-    classified_refs: list[ImageRef | Path] = [_classify_ref(ref) for ref in refs]
+    split_refs = [split_cli_ref(ref) for ref in refs]
+    classified_refs: list[ImageRef | Path] = [_classify_ref(path_str) for _, path_str in split_refs]
+    ref_aliases: tuple[str | None, ...] = tuple(
+        (explicit_name or default_ref_name(path_str)) if isinstance(classified, Path) else None
+        for (explicit_name, path_str), classified in zip(split_refs, classified_refs, strict=True)
+    )
 
     # Reject over-cap ref counts at the CLI boundary with a clear message (exit
     # 2) rather than letting the domain ValueError surface as a generic error.
@@ -1883,6 +1894,16 @@ def i2i(  # NOSONAR
     if n_refs > cap:
         msg = f"{model_enum.value} accepts at most {cap} reference item(s); got {n_refs}"
         raise click.UsageError(msg)
+
+    try:
+        prompt = replace_ref_aliases(prompt, ref_aliases)
+    except ConfigurationError as exc:
+        err = exc
+
+        async def _raise_err() -> None:
+            raise err
+
+        run_with_handlers(_raise_err, cli_command="image i2i", as_json=as_json)
 
     profile_name = _resolve_profile(profile)
     project_id = default_project(project_id, project_name, profile_name)
@@ -1901,6 +1922,7 @@ def i2i(  # NOSONAR
             tuple(AgentInstruction(text=i) for i in instructions) if instructions else None
         ),
         ui_mode=UiMode(ui_mode) if ui_mode else None,
+        ref_aliases=ref_aliases,
     )
     run_with_handlers(
         lambda: _run_i2i(

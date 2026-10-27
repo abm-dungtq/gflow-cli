@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Local reference image aliases (`--ref name=path` and `{"name", "path"}` in `gflow run`)**.
+  `gflow image i2i --ref <name>=<path>` (when `<name>` matches `^[\w-]+$` and `<path>` is an
+  existing file) and `gflow run --config` (`ref` / `refs[]` entries as `{"name": "...", "path": "..."}`)
+  assign a local alias to a reference image (defaulting to the filename stem when omitted;
+  mentioning a name two references share raises `ConfigurationError`, exit 11). Before
+  `resolve_and_apply`, each whole-word case-insensitive `@<name>` matching a local reference
+  image is replaced with `reference image N` (1-based in reference order), while unmatched
+  `@mention` tokens remain untouched for project asset resolution.
 - **`gflow run --config` multi-reference (`refs`) and per-row `output` support**.
   Each `prompts[]` row now accepts `"refs": ["path/to/ref1.png", ...]` (up to the model's
   reference cap, optionally mixed with `"batch:N"`; mutually exclusive with `"ref"`) and

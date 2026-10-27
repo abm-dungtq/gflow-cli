@@ -44,6 +44,11 @@ from gflow_cli.errors import (
     MediaAttributionError,
     RpcResponseUnavailableError,
 )
+from gflow_cli.ref_aliases import (
+    default_ref_name,
+    parse_config_ref_entry,
+    replace_ref_aliases,
+)
 from gflow_cli.storage import cloud_info_from_path
 
 if TYPE_CHECKING:
@@ -155,6 +160,7 @@ class BatchPromptItem:
     refs: tuple[str, ...] = ()
     output: str | None = None
     reference_entity: str | None = None
+    ref_aliases: tuple[str | None, ...] = ()
 
     @property
     def all_refs(self) -> tuple[str, ...]:
@@ -393,10 +399,10 @@ def _parse_refs_field(
     *,
     idx: int,
     model: str,
-) -> tuple[str, ...]:
-    """Validate ``prompts[idx].refs`` and return a tuple of non-empty strings."""
+) -> tuple[tuple[str, ...], tuple[str | None, ...]]:
+    """Validate ``prompts[idx].refs`` and return ``(paths, aliases)``."""
     if refs_raw is None:
-        return ()
+        return (), ()
     if not isinstance(refs_raw, list) or not refs_raw:
         msg = f"prompts[{idx}].refs must be a non-empty list of strings."
         raise ConfigurationError(msg)
@@ -409,11 +415,12 @@ def _parse_refs_field(
         )
         raise ConfigurationError(msg)
     parsed: list[str] = []
+    aliases: list[str | None] = []
     for r_idx, item_val in enumerate(refs_list):
-        if not isinstance(item_val, str) or not item_val.strip():
-            msg = f"prompts[{idx}].refs[{r_idx}] must be a non-empty string."
-            raise ConfigurationError(msg)
-        if _MEDIA_ID.fullmatch(item_val):
+        explicit_name, path_val = parse_config_ref_entry(
+            item_val, label=f"prompts[{idx}].refs[{r_idx}]"
+        )
+        if _MEDIA_ID.fullmatch(path_val):
             msg = (
                 f"prompts[{idx}].refs[{r_idx}] is not supported yet: manifest references were "
                 "never applied (#913). A row's `refs` names an earlier row "
@@ -421,8 +428,11 @@ def _parse_refs_field(
                 "`gflow image i2i --ref <media id>`."
             )
             raise ConfigurationError(msg)
-        parsed.append(item_val)
-    return tuple(parsed)
+        parsed.append(path_val)
+        aliases.append(
+            None if path_val.startswith("batch:") else (explicit_name or default_ref_name(path_val))
+        )
+    return tuple(parsed), tuple(aliases)
 
 
 def parse_batch_item_dict(p: dict[str, Any], idx: int) -> BatchPromptItem:
@@ -488,18 +498,21 @@ def parse_batch_item_dict(p: dict[str, Any], idx: int) -> BatchPromptItem:
     if output is not None and output_filename is not None:
         msg = f"prompts[{idx}] cannot specify both 'output' and 'output_filename'."
         raise ConfigurationError(msg)
-    ref = p.get("ref")
-    if ref is not None and (not isinstance(ref, str) or not ref.strip()):
-        msg = f"prompts[{idx}].ref must be a non-empty string."
-        raise ConfigurationError(msg)
+    ref_raw = p.get("ref")
     refs_raw = p.get("refs")
-    if ref is not None and refs_raw is not None:
+    if ref_raw is not None and refs_raw is not None:
         msg = (
             f"prompts[{idx}] cannot specify both 'ref' and 'refs'; "
             "use 'ref' for a single reference or 'refs' for a list."
         )
         raise ConfigurationError(msg)
-    refs = _parse_refs_field(refs_raw, idx=idx, model=model)
+    ref: str | None = None
+    ref_alias: str | None = None
+    if ref_raw is not None:
+        ref_alias, ref = parse_config_ref_entry(ref_raw, label=f"prompts[{idx}].ref")
+    refs, ref_aliases = _parse_refs_field(refs_raw, idx=idx, model=model)
+    if ref is not None:
+        ref_aliases = (None if ref.startswith("batch:") else (ref_alias or default_ref_name(ref)),)
     reference_entity = p.get("reference_entity")
     if reference_entity is not None and not isinstance(reference_entity, str):
         msg = f"prompts[{idx}].reference_entity must be a string."
@@ -519,8 +532,9 @@ def parse_batch_item_dict(p: dict[str, Any], idx: int) -> BatchPromptItem:
                 "`gflow image i2i --ref <media id>`."
             )
             raise ConfigurationError(msg)
+    resolved_text = replace_ref_aliases(text_raw, ref_aliases)
     return BatchPromptItem(
-        text=text_raw,
+        text=resolved_text,
         aspect_ratio=aspect_ratio,
         model=model,
         count=count,
@@ -530,6 +544,7 @@ def parse_batch_item_dict(p: dict[str, Any], idx: int) -> BatchPromptItem:
         ref=ref,
         refs=refs,
         reference_entity=reference_entity,
+        ref_aliases=ref_aliases,
     )
 
 

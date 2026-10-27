@@ -55,6 +55,7 @@ from gflow_cli.image_batch import (
     target_for_batch_item_image,
 )
 from gflow_cli.paths import resolve_batch_output_dir
+from gflow_cli.ref_aliases import default_ref_name, replace_ref_aliases
 
 console = Console()
 
@@ -140,10 +141,26 @@ def _resolve_file_ref(item: BatchPromptItem, base_dir: Path) -> BatchPromptItem:
                     )
                 )
         resolved_refs = tuple(resolved_list)
+    aliases = (
+        item.ref_aliases
+        if item.ref_aliases
+        else tuple(
+            default_ref_name(r)
+            for r in (resolved_refs or ((resolved_ref,) if resolved_ref else ()))
+        )
+    )
+    resolved_text = replace_ref_aliases(item.text, aliases)
     resolved_output = item.output
     if item.output is not None:
         resolved_output = _resolve_output_path(item.output, idx=item.index, base_dir=base_dir)
-    return replace(item, ref=resolved_ref, refs=resolved_refs, output=resolved_output)
+    return replace(
+        item,
+        text=resolved_text,
+        ref=resolved_ref,
+        refs=resolved_refs,
+        ref_aliases=aliases,
+        output=resolved_output,
+    )
 
 
 @dataclass(frozen=True)
