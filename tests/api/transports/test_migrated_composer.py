@@ -1872,14 +1872,52 @@ def _ours(status: int, url: str | None = None, *, wf: str = WF_OURS) -> list[Any
     return rec
 
 
+class ListingTab(FakePage):
+    """The second tab the fallback opens: loading the project answers ``listing``."""
+
+    def __init__(self, listing: str | None) -> None:
+        super().__init__()
+        self.listing, self.closed = listing, False
+
+    async def goto(self, url: str, **kw: Any) -> None:
+        await super().goto(url, **kw)
+        if self.listing is not None:
+            self._fire_response(FakeResponse(_batch_url("Zzl0ze"), self.listing))
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 async def _observe_lost(
-    responses: list[tuple[str, ...]], *, poll_timeout_s: float = 2.0
+    responses: list[tuple[str, ...]],
+    *,
+    poll_timeout_s: float = 2.0,
+    tab: ListingTab | None = None,
 ) -> tuple[Any, list[Any]]:
+    from types import SimpleNamespace
+
     from gflow_cli.api.transports.migrated_composer import MigratedComposer
 
     page = FakePage()
     page.dom.prompt = "a crane"
     page.scripted_responses = [(_batch_url("YhhmEf"), LOST_BODY), *responses]
+    tab = tab or ListingTab(None)
+    clicked: list[bool] = []
+    fire = page._fire_submit  # pyright: ignore[reportPrivateUsage]
+
+    def fire_and_note() -> None:
+        clicked.append(True)
+        fire()
+
+    page._fire_submit = fire_and_note  # type: ignore[method-assign]
+
+    async def new_page() -> ListingTab:
+        # Row 9: a second tab open during the upload steals the file chooser's focus,
+        # so it may only open once the submit has been clicked.
+        assert clicked, "the second tab opened before the submit"
+        return tab
+
+    page.context = SimpleNamespace(new_page=new_page)  # type: ignore[attr-defined]
     started: list[Any] = []
     rec = await MigratedComposer().submit_and_observe(
         page,
@@ -1891,7 +1929,9 @@ async def _observe_lost(
     return rec, started
 
 
-async def test_a_lost_submit_reply_adopts_the_clip_carrying_our_upload_1112() -> None:
+async def test_a_lost_submit_reply_adopts_the_clip_carrying_our_upload_1112(
+    install_log_capture: Any,
+) -> None:
     """Spike 2026-10-27: after a lost MZZa6b body the next poll listed an older clip of the
     project beside ours. Only ours carries the id this run uploaded."""
     rec, started = await _observe_lost(
@@ -1905,6 +1945,15 @@ async def test_a_lost_submit_reply_adopts_the_clip_carrying_our_upload_1112() ->
     )
     assert rec.workflow_id == WF_OURS and rec.is_done and rec.video_url == VIDEO_URL
     assert [(s.media_id, s.workflow_id) for s in started] == [(MEDIA_OURS, WF_OURS)]
+    # Row 18: one WARNING line, which the default log level prints to the console.
+    lost = [
+        e for e in install_log_capture.entries if e["event"] == "migrated.video_submit_reply_lost"
+    ]
+    assert (
+        len(lost) == 1 and lost[0]["log_level"] == "warning" and "no re-submit" in lost[0]["note"]
+    )
+    adopted = [e["event"] for e in install_log_capture.entries if "adopted" in e["event"]]
+    assert adopted == ["migrated.video_adopted_from_status"]
 
 
 async def test_an_adopted_clip_that_fails_is_a_failed_generation_not_exit_9_1112() -> None:
@@ -1941,6 +1990,23 @@ async def test_a_lost_reply_with_no_matching_poll_names_the_project_1112() -> No
         )
     assert "unreadable" in ei.value.detail and f"/project/{PROJ}" in ei.value.detail
     assert not is_retryable(ei.value)
+
+
+async def test_with_no_status_match_the_listing_in_a_second_tab_adopts_1112(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Row 8: the polls after the loss never named our clip (their bodies lost too). The
+    project listing, read in a tab opened after the submit, still holds it."""
+    from gflow_cli.api.transports import migrated_composer as mc
+
+    monkeypatch.setattr(mc, "SUBMIT_REPLY_BUDGET_S", 0.2)
+    tab = ListingTab(_frame("Zzl0ze", [[[_record(3, VIDEO_URL)], [_ours(3, VIDEO_URL)]]]))
+    rec, started = await _observe_lost(
+        [(_batch_url("jwpduf"), LOST_BODY)], poll_timeout_s=2.0, tab=tab
+    )
+    assert rec.workflow_id == WF_OURS and rec.is_done and rec.video_url == VIDEO_URL
+    assert len(started) == 1
+    assert tab.gotos == [mc.MIGRATED_PROJECT_URL.format(project_id=PROJ)] and tab.closed
 
 
 async def test_a_lost_status_body_is_skipped_and_the_next_poll_adopts_1112() -> None:

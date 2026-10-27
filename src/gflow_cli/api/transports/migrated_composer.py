@@ -109,6 +109,8 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)
 
 MIGRATED_PROJECT_URL = "https://flow.google.com/project/{project_id}"
+#: The project listing the app reads on load: every clip, with the request that made it.
+LISTING_RPC = "Zzl0ze"
 READY_ANCHOR = ".settings-trigger-button"
 OVERLAY = ".cdk-overlay-pane"
 #: Playwright's own visibility engine — the detached overlays Angular leaves behind are
@@ -462,6 +464,8 @@ SUBMIT_BUTTON = "the submit button (ligature 'arrow_forward')"
 
 #: The submit reply arrived 4.0–4.6 s after the click in both measured runs.
 SUBMIT_REPLY_BUDGET_S = 60.0
+#: How long the lost-reply fallback waits for the project listing in its second tab.
+LISTING_READ_BUDGET_S = 30.0
 # Angular enables the arrow_forward button ~100 ms after `insert_text` lands in the
 # composer (measured 2026-09-05, #670); checking it synchronously reads the stale state.
 SUBMIT_ENABLE_BUDGET_S = 5.0
@@ -3071,7 +3075,9 @@ class MigratedComposer:
                 (rec,) = matches.values()
                 workflow["id"] = rec.workflow_id
                 log.info(
-                    "migrated.video_adopted_from_status",
+                    "migrated.video_adopted_from_listing"
+                    if rid == LISTING_RPC
+                    else "migrated.video_adopted_from_status",
                     rpc=rid,
                     workflow_id=rec.workflow_id,
                     media_id=rec.media_id,
@@ -3105,7 +3111,11 @@ class MigratedComposer:
                 # loses the workflow id, so no status reply can settle the run either.
                 if rpcid in submit_rpcs and not submitted.done() and adopt_ids:
                     lost["rpc"] = rpcid
-                    log.warning("migrated.video_submit_reply_lost", rpc=rpcid)
+                    log.warning(
+                        "migrated.video_submit_reply_lost",
+                        rpc=rpcid,
+                        note="submit reply lost; following the clip in the project, no re-submit",
+                    )
                 elif rpcid in submit_rpcs and not submitted.done():
                     submitted.set_exception(
                         _outcome_unknown(
@@ -3203,6 +3213,16 @@ class MigratedComposer:
             await asyncio.wait(
                 {submitted, route_error}, timeout=budget, return_when=asyncio.FIRST_COMPLETED
             )
+            if lost and not submitted.done() and not route_error.done() and project_id:
+                # No poll named it (their bodies can be lost too): the project listing,
+                # read in a tab opened only now, after the upload's file chooser is done.
+                listing = await self._read_listing(
+                    page,
+                    project_id,
+                    budget_s=max(0.0, min(LISTING_READ_BUDGET_S, deadline - time.monotonic())),
+                )
+                if listing is not None and not submitted.done():
+                    _adopt(LISTING_RPC, listing)
             if lost and not submitted.done() and not route_error.done():
                 # The clip is being made; a status poll may still name it before the deadline.
                 await asyncio.wait(
@@ -3257,6 +3277,37 @@ class MigratedComposer:
                 submitted.exception()
             page.remove_listener("response", on_response)
             page.remove_listener("request", on_request)
+
+    async def _read_listing(self, page: Page, project_id: str, *, budget_s: float) -> Any | None:
+        """The project's ``Zzl0ze`` payload, read in a second tab; ``None`` if none came.
+
+        A second tab, because the generating page must not navigate mid-generation, and
+        its own first-load listing was not observed to answer (spike 2026-10-27)."""
+        got: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+
+        async def on_response(response: Any) -> None:
+            if got.done() or LISTING_RPC not in str(getattr(response, "url", "")):
+                return
+            try:
+                text = await response.text()
+            except Exception:  # noqa: BLE001 - a lost body leaves the fallback empty
+                return
+            for rid, payload in parse_frames(text):
+                if rid == LISTING_RPC and not got.done():
+                    got.set_result(payload)
+
+        tab = await page.context.new_page()
+        tab.on("response", on_response)
+        try:
+            await tab.goto(
+                MIGRATED_PROJECT_URL.format(project_id=project_id), wait_until="domcontentloaded"
+            )
+            return await asyncio.wait_for(got, budget_s)
+        except TimeoutError:
+            log.warning("migrated.video_listing_unanswered", budget_s=budget_s)
+            return None
+        finally:
+            await tab.close()
 
     async def _verify_submit_target(self, page: Page, submit: Locator) -> None:
         """Prove the submit button is visible and receives pointer events."""
