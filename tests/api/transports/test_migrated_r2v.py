@@ -562,3 +562,57 @@ async def test_the_chip_count_refusal_states_the_numbers_it_compared(
     detail = str(exc_info.value.detail)
     assert "1 image reference(s) + 1 character(s) = 2 chip(s) requested" in detail
     assert "1 on the prompt" in detail
+
+
+@pytest.mark.parametrize(
+    ("images", "uploaded", "expected"),
+    [((Path("a.png"),), ("m1",), ("m1", "ent-kael")), ((), (), ("ent-kael",))],
+    ids=["with-image", "character-only"],
+)
+async def test_the_submit_body_must_carry_the_committed_characters(
+    monkeypatch: pytest.MonkeyPatch,
+    images: tuple[Path, ...],
+    uploaded: tuple[str, ...],
+    expected: tuple[str, ...],
+) -> None:
+    """#723: the body guard checked only uploaded image ids, so a character-only r2v had
+    no body guard at all. The entity id rides the MZZa6b body (route-abort, 2026-10-27:
+    ``[null,null,["<entity id>","Kael"]]`` beside the uploaded ref), so it is required too.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from gflow_cli.api.transports import migrated_composer as mc
+    from gflow_cli.api.transports.batchexecute import GenerationRecord
+
+    composer = MagicMock()
+    composer.ensure_editor = AsyncMock(return_value="classic")
+    composer.apply_video_settings = AsyncMock()
+    composer.attach_references = AsyncMock(return_value=uploaded)
+    composer.attach_character_entities = AsyncMock(return_value=("ent-kael",))
+    composer.send_prompt = AsyncMock()
+    composer.read_chips = AsyncMock(
+        return_value=[{"reference_type": "media"}] * len(images) + [{"reference_type": "entity"}]
+    )
+    composer.submit_and_observe = AsyncMock(
+        return_value=GenerationRecord(
+            workflow_id="wf", project_id="p1", media_id="v1", status=3, video_url="https://x"
+        )
+    )
+    monkeypatch.setattr(mc, "MigratedComposer", lambda **_: composer)
+
+    request = _r2v(
+        reference_images=images,
+        reference_entities=("ent-kael",),
+        reference_entity_names=("Kael",),
+    )
+    await mc.run_video(
+        MagicMock(url="about:blank"),
+        request,
+        project_id="p1",
+        save=MagicMock(),
+        poll_timeout_s=1.0,
+        download=False,
+        on_started=None,
+    )
+    kwargs = composer.submit_and_observe.await_args.kwargs
+    assert kwargs["expect_reference_ids"] == expected

@@ -1156,7 +1156,7 @@ def _r2v_body_problem(body: str, rpcid: str, media_ids: tuple[str, ...]) -> str 
         other = [u for u in UUID_RE.findall(body) if u.lower() not in known]
         return (
             f"migrated host: the {rpcid} submit body is missing {len(missing)} of "
-            f"{len(media_ids)} uploaded reference(s) ({', '.join(missing[:3])}; ids in the "
+            f"{len(media_ids)} reference(s) ({', '.join(missing[:3])}; ids in the "
             f"body: {', '.join(other[:4]) or 'none'}) — the picker bound different assets"
         )
     return None
@@ -3667,6 +3667,7 @@ async def run_video(
     media_id: str | None = None
     end_media_id: str | None = None
     reference_ids: tuple[str, ...] = ()
+    entity_ids: tuple[str, ...] = ()
     frame = request.start_image
     if request.mode is Mode.I2V and frame is not None:
         media_id = await composer.attach_start_frame(page, pid, frame)
@@ -3678,7 +3679,7 @@ async def run_video(
         # #723: characters attach through the SAME `@` picker as media, so they go on
         # after any uploads (whose file chooser steals keyboard focus) and must not clear
         # mentions those uploads already placed.
-        await composer.attach_character_entities(
+        entity_ids = await composer.attach_character_entities(
             page,
             entity_ids=tuple(request.reference_entities),
             names=tuple(request.reference_entity_names),
@@ -3707,7 +3708,9 @@ async def run_video(
         project_id=pid,
         expect_media_id=media_id,
         expect_end_media_id=end_media_id,
-        expect_reference_ids=reference_ids,
+        # The committed entity ids ride the MZZa6b body beside the media ids (route-abort
+        # capture, 2026-10-27), so a character-only run is guarded too.
+        expect_reference_ids=reference_ids + entity_ids,
     )
     status = VideoStatus(
         media_id=record.media_id,

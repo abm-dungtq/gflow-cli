@@ -12,8 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Reference-to-video with a character now runs on flow.google.com**
   ([#723](https://github.com/ffroliva/gflow-cli/issues/723)). Local-file `video r2v` with
   `--reference-entity` paired with `--reference-entity-name` is served on the migrated host:
-  the character is attached through the composer's `@` picker and its chip is verified
-  before the billed submit. The refusal rested on a null submit reply measured on
+  the character is attached through the composer's `@` picker, its chip is verified before
+  the billed click, and the submit body must carry its entity id beside every uploaded
+  image, or the run is refused before Flow acts on it. An MCP r2v whose only reference is a
+  character had no submit-body check at all before. The refusal rested on a null submit reply measured on
   2026-09-07; on 2026-10-26 an entity-bound r2v run completed end to end through the stock
   observer. An entity id without a name now exits 36 with that reason instead of failing
   later on a chip-count mismatch. Text-to-video with a character stays refused (exit 36,
