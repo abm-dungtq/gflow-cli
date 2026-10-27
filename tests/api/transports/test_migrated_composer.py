@@ -555,6 +555,7 @@ LOST_BODY = "<lost body>"
 class FakeResponse:
     def __init__(self, url: str, text: str, status: int = 200) -> None:
         self.url, self._text, self.status = url, text, status
+        self.request: Any = None
 
     async def text(self) -> str:
         if self._text == LOST_BODY:
@@ -617,15 +618,20 @@ class FakePage:
             asyncio.get_event_loop().create_task(_maybe_await(h(response)))
 
     def _fire_submit(self) -> None:
+        request = None
         if self.scripted_request is not None:
             rpcid, body = self.scripted_request
             # None rpcid: the real nprQif shape — no rpcids query param at all.
             url = _batch_url(rpcid) if rpcid is not None else _batch_bare_url()
+            request = FakeRequest(url, body)
             for h in list(self._handlers["request"]):
-                asyncio.get_event_loop().create_task(_maybe_await(h(FakeRequest(url, body))))
+                asyncio.get_event_loop().create_task(_maybe_await(h(request)))
         for scripted in self.scripted_responses:
             url, text, *rest = scripted
-            self._fire_response(FakeResponse(url, text, *rest))
+            response = FakeResponse(url, text, *rest)
+            # Playwright hands back the same Request object a response answers.
+            response.request = request if request is not None and request.url == url else None
+            self._fire_response(response)
 
     def expect_file_chooser(self, **_: Any) -> FakeChooserContext:
         return FakeChooserContext(self)
@@ -1875,12 +1881,14 @@ def _ours(status: int, url: str | None = None, *, wf: str = WF_OURS) -> list[Any
 class ListingTab(FakePage):
     """The second tab the fallback opens: loading the project answers ``listing``."""
 
-    def __init__(self, listing: str | None) -> None:
+    def __init__(self, listing: str | None, *, goto_error: Exception | None = None) -> None:
         super().__init__()
-        self.listing, self.closed = listing, False
+        self.listing, self.closed, self.goto_error = listing, False, goto_error
 
     async def goto(self, url: str, **kw: Any) -> None:
         await super().goto(url, **kw)
+        if self.goto_error is not None:
+            raise self.goto_error
         if self.listing is not None:
             self._fire_response(FakeResponse(_batch_url("Zzl0ze"), self.listing))
 
@@ -1926,6 +1934,8 @@ async def _observe_lost(
         project_id=PROJ,
         adopt_ids=(MEDIA_UP,),
     )
+    # Row 4: recovery never clicks submit a second time.
+    assert len(clicked) == 1
     return rec, started
 
 
@@ -2007,6 +2017,54 @@ async def test_with_no_status_match_the_listing_in_a_second_tab_adopts_1112(
     assert rec.workflow_id == WF_OURS and rec.is_done and rec.video_url == VIDEO_URL
     assert len(started) == 1
     assert tab.gotos == [mc.MIGRATED_PROJECT_URL.format(project_id=PROJ)] and tab.closed
+
+
+async def test_a_failed_listing_tab_still_ends_in_the_named_exit_9_1112(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Playwright's TimeoutError is not the builtin one, and a navigation can fail with
+    net::ERR_*: either must leave the fallback empty, not replace the exit 9 that names
+    the project with a raw browser error on an already-billed run."""
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    from gflow_cli.api.transports import migrated_composer as mc
+    from gflow_cli.errors import TransportTimeoutError
+
+    monkeypatch.setattr(mc, "SUBMIT_REPLY_BUDGET_S", 0.2)
+    tab = ListingTab(None, goto_error=PlaywrightTimeoutError("Page.goto: Timeout exceeded"))
+    with pytest.raises(TransportTimeoutError) as ei:
+        await _observe_lost([], poll_timeout_s=0.5, tab=tab)
+    assert "unreadable" in ei.value.detail and tab.closed
+
+
+async def test_a_lost_interpolation_submit_reply_is_followed_too_1112() -> None:
+    """A start+end submit (nprQif) answers on a bare batchexecute URL with no rpcids
+    param, so its lost body is tied to the submit through the request it answers."""
+    from gflow_cli.api.transports.migrated_composer import MigratedComposer
+
+    page = FakePage()
+    page.dom.prompt = "a crane"
+    page.scripted_request = (None, _interp_body())
+    page.scripted_responses = [
+        (_batch_bare_url(), LOST_BODY),
+        (_batch_url("as29s"), _frame("as29s", _ours(3, VIDEO_URL))),
+    ]
+    started: list[Any] = []
+    with capture_logs() as logs:
+        rec = await MigratedComposer().submit_and_observe(
+            page,
+            poll_timeout_s=2.0,
+            on_started=started.append,
+            project_id=PROJ,
+            expect_media_id=MEDIA_UP,
+            expect_end_media_id=END_UP,
+            adopt_ids=(MEDIA_UP, END_UP),
+        )
+    assert rec.workflow_id == WF_OURS and rec.is_done and len(started) == 1
+    lost = [e for e in logs if e["event"] == "migrated.video_submit_reply_lost"]
+    assert [e["rpc"] for e in lost] == ["nprQif"]
+    # Row 12: the submit body (it carries the reCAPTCHA token on the wire) is never logged.
+    assert not any("f.req" in str(e) or "a prompt" in str(e) for e in logs)
 
 
 async def test_a_lost_status_body_is_skipped_and_the_next_poll_adopts_1112() -> None:

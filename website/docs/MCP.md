@@ -196,7 +196,7 @@ flow.google.com composer for any `TransportTimeoutError` raised **after the subm
 ([#1010](https://github.com/ffroliva/gflow-cli/issues/1010)): an unreadable or missing
 submit reply, or a generation that is not terminal in time, is `retryable: false`, because
 Flow may already have made and billed it. An unreadable reply on a video run that uploaded a
-file (`reference_images`, a start or end frame) is followed to its clip instead and completes
+file (`reference_images`, `initial_frame` or `end_frame`) is followed to its clip instead and completes
 normally ([#1112](https://github.com/ffroliva/gflow-cli/issues/1112)); a text-to-video or
 character-only run still gets the `retryable: false` error. Likewise a failed download of a finished
 generation (`MediaDownloadError`, exit 6, `type` `…/errors/media-download`) is

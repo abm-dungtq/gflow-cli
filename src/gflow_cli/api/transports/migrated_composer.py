@@ -31,6 +31,7 @@ matched with a Python-side ``filter(has_text=re.compile(...))`` instead.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import mimetypes
 import re
@@ -43,6 +44,7 @@ from urllib.parse import unquote_plus, urlsplit
 from uuid import uuid4
 
 import structlog
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from gflow_cli.api.dto import CreditsInfo, GeneratedImage, ProjectInfo
@@ -2982,10 +2984,13 @@ class MigratedComposer:
 
         ``adopt_ids`` are media ids this run uploaded. When Chrome loses the submit reply
         body (#1112), the status poll whose record carries one of them is adopted as the
-        submit; such an id exists in no older clip, so no other clip can match."""
+        submit; each upload is a run-unique copy (18 of 18 distinct reference ids in the
+        2026-10-27 spike), so an older clip does not carry it."""
         loop = asyncio.get_running_loop()
         submitted: asyncio.Future[GenerationRecord] = loop.create_future()
         route_error: asyncio.Future[GFlowError] = loop.create_future()
+        # (request, rpcid) of each submit sent, to place a reply that names no rpcid.
+        submit_requests: list[tuple[Any, str]] = []
 
         def on_request(request: Any) -> None:
             url = str(getattr(request, "url", ""))
@@ -3010,6 +3015,7 @@ class MigratedComposer:
                     route_error.set_result(verdict)
                     return
             if rpcid in submit_rpcs:
+                submit_requests.append((request, rpcid))
                 if rpcid == INTERPOLATION_SUBMIT_RPC:
                     problem = _interpolation_body_problem(
                         body, rpcid, expect_media_id, expect_end_media_id
@@ -3109,17 +3115,26 @@ class MigratedComposer:
             except Exception:  # noqa: BLE001 - an aborted/streamed body is not our frame
                 # #1009/#1010: Chrome can drop a reply body. On the submit reply that
                 # loses the workflow id, so no status reply can settle the run either.
-                if rpcid in submit_rpcs and not submitted.done() and adopt_ids:
-                    lost["rpc"] = rpcid
+                # nprQif answers on a bare URL: tie it to the submit by its request.
+                sent = getattr(response, "request", None)
+                sub = (
+                    rpcid
+                    if rpcid in submit_rpcs
+                    else next((r for q, r in submit_requests if q is sent), None)
+                )
+                if sub is None or submitted.done():
+                    return
+                if adopt_ids:
+                    lost["rpc"] = sub
                     log.warning(
                         "migrated.video_submit_reply_lost",
-                        rpc=rpcid,
+                        rpc=sub,
                         note="submit reply lost; following the clip in the project, no re-submit",
                     )
-                elif rpcid in submit_rpcs and not submitted.done():
+                else:
                     submitted.set_exception(
                         _outcome_unknown(
-                            f"migrated host: the {rpcid} submit reply arrived but its "
+                            f"migrated host: the {sub} submit reply arrived but its "
                             "body was unreadable"
                         )
                     )
@@ -3296,18 +3311,28 @@ class MigratedComposer:
                 if rid == LISTING_RPC and not got.done():
                     got.set_result(payload)
 
-        tab = await page.context.new_page()
-        tab.on("response", on_response)
+        end = time.monotonic() + budget_s
+        tab: Page | None = None
         try:
+            tab = await page.context.new_page()
+            tab.on("response", on_response)
             await tab.goto(
-                MIGRATED_PROJECT_URL.format(project_id=project_id), wait_until="domcontentloaded"
+                MIGRATED_PROJECT_URL.format(project_id=project_id),
+                wait_until="domcontentloaded",
+                timeout=budget_s * 1000,
             )
-            return await asyncio.wait_for(got, budget_s)
-        except TimeoutError:
-            log.warning("migrated.video_listing_unanswered", budget_s=budget_s)
+            return await asyncio.wait_for(got, max(0.0, end - time.monotonic()))
+        # Playwright's TimeoutError is not the builtin one. Any failure here leaves the
+        # caller's exit 9, which names the project; this runs after Flow has billed.
+        except (TimeoutError, PlaywrightError) as exc:
+            log.warning(
+                "migrated.video_listing_unanswered", budget_s=budget_s, error=type(exc).__name__
+            )
             return None
         finally:
-            await tab.close()
+            if tab is not None:
+                with contextlib.suppress(PlaywrightError):
+                    await tab.close()
 
     async def _verify_submit_target(self, page: Page, submit: Locator) -> None:
         """Prove the submit button is visible and receives pointer events."""

@@ -132,7 +132,7 @@ ported to flow.google.com after this release, #795.)
 **No second billed generation after the submit click (#1010).** A lost image submit reply
 used to make gflow submit the image again; a lost video reply, or any timeout after the
 click, was reported as retryable. Both now report exit 9 with `retryable: false` and say to
-check the project before re-running.
+check the project before re-running. (A lost video reply on a run that uploaded a file is followed to its clip since #1112.)
 
 **Also:** `image i2i --ref <uuid>` references an earlier image in place (#995); MCP image
 results report the seed Flow used, and `gflow_generate_image` no longer takes `seed`

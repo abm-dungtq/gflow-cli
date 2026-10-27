@@ -204,8 +204,18 @@ done match, download it through the caller's path. Otherwise raise exit 9.
 - Task 6: no parameter, payload key or leaf changed, so the six axes reduce to docs. The
   queued path gets the adopted ids through the worker's own `on_started`
   (`worker/daemon.py`), which the observer fires on adoption exactly as on a read reply.
-- Row 4 (one submit) is pinned by the e2e's reply count; offline, the observer has one
-  click call and no retry loop.
+- Row 4 (one submit): `_observe_lost` asserts exactly one submit click offline; the e2e
+  counts the submit replies gflow read.
+- Row 12: `test_a_lost_interpolation_submit_reply_is_followed_too_1112` asserts no event
+  carries the submit body.
+- Row 14 is covered by composition: adoption fires `on_started` once with the adopted ids
+  (`test_a_lost_submit_reply_adopts_the_clip_carrying_our_upload_1112`), and the worker
+  writes whatever `on_started` reports onto the queue row
+  (`tests/worker/test_daemon.py::test_a_failed_download_still_records_the_media_id_on_the_queue_row`).
+- Council (branch review) found the start+end submit (`nprQif`) answers on a bare URL,
+  so its lost body was never recognised; it is now tied to its request. It also found
+  Playwright's `TimeoutError` escaping the listing read; any browser error there now
+  leaves the named exit 9.
 
 ## Task 8: gates and the paid proof
 
