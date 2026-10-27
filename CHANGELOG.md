@@ -50,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Long image batches no longer fail every row once the shared reference scrolls away.**
+  A local reference is uploaded once per run and then mentioned in place, but the editor
+  lists only the newest part of the project grid; after enough rows the upload dropped out
+  of it and each later row failed with `ReferenceNotFoundError`. The row now uploads its
+  local files again (the new copy is newest) and is retried once; nothing was submitted
+  before the miss, so nothing is sent twice.
 - **MCP `wait=false` generations now run**
   ([#1097](https://github.com/ffroliva/gflow-cli/issues/1097)). Before, `gflow_generate_image`
   and `gflow_generate_video` with `wait=false` saved the job and returned a `task_id`, but no

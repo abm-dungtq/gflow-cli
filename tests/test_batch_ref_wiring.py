@@ -231,3 +231,49 @@ def test_an_upload_with_an_unknown_outcome_is_never_uploaded_again(tmp_path: Pat
     assert all("RpcResponseUnavailableError" in (o.error or "") for o in outcomes)
     assert [o.exit_code for o in outcomes] == [7, 7]
     assert client.uploads == [photo]
+
+
+class GridDropClient(UploadingClient):
+    """The first upload falls out of the editor's grid after one row, like a busy project."""
+
+    async def upload_reference(self, project_id: str, path: Path) -> Any:
+        from gflow_cli.api.image import ImageRef
+
+        self.uploads.append(path)
+        return ImageRef(name=f"up-{len(self.uploads)}", display_name="photo.png", in_project=True)
+
+    async def generate_image(self, project_id: str, req: Any) -> Any:
+        from gflow_cli.errors import ReferenceNotFoundError
+
+        if req.prompt == "blue" and [r.name for r in req.refs] == ["up-1"]:
+            raise ReferenceNotFoundError(detail="image up-1 is not in this project's grid")
+        return await super().generate_image(project_id, req)
+
+
+def test_a_reused_upload_missing_from_the_grid_is_uploaded_again_once(tmp_path: Path) -> None:
+    photo = tmp_path / "photo.png"
+    photo.write_bytes(b"\x89PNG")
+    client = GridDropClient(fail_generate=set(), fail_download=set())
+    rows = (
+        BatchPromptItem("green", index=0, ref=str(photo)),
+        BatchPromptItem("blue", index=1, ref=str(photo)),
+        BatchPromptItem("red", index=2, ref=str(photo)),
+    )
+    outcomes = asyncio.run(
+        run_image_batch(
+            profile_dir=tmp_path,
+            headless=True,
+            transport=None,
+            prompts=rows,
+            output_dir=tmp_path / "out",
+            continue_on_error=True,
+            project_title="t",
+            client_factory=lambda **_: client,
+            jitter_range=(0, 0),
+            _command="run",
+        )
+    )
+    assert [o.status for o in outcomes] == ["ok", "ok", "ok"]
+    assert len(client.uploads) == 2  # the miss re-uploads once; later rows reuse the new copy
+    assert [r.name for r in client.requests["blue"].refs] == ["up-2"]
+    assert [r.name for r in client.requests["red"].refs] == ["up-2"]

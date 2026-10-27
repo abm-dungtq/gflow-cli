@@ -882,6 +882,8 @@ async def run_image_batch(
         project_id: str,
         _position: int,
         item: BatchPromptItem,
+        *,
+        reuploaded: bool = False,
     ) -> BatchOutcome:
         if resumed and (done := resumed.get(item.index)) is not None:
             results[item.index] = done
@@ -956,6 +958,20 @@ async def run_image_batch(
             references=references_tuple,
             project_created=project_created,
         )
+        # The editor lists only the newest part of the project's grid, so after enough rows
+        # the upload this run reuses drops out of it and the miss is raised before anything is
+        # submitted. Upload this row's local files again (the copy is newest) and retry once.
+        stale = [spec for spec, ref in uploads.items() if ref in references_tuple]
+        if (
+            not reuploaded
+            and stale
+            and outcome.status == "fail"
+            and (outcome.error or "").startswith("ReferenceNotFoundError")
+        ):
+            logger.info("batch.reference_reupload", index=item.index, count=len(stale))
+            for spec in stale:
+                del uploads[spec]
+            return await image_worker(client, project_id, _position, item, reuploaded=True)
         results[item.index] = outcome
         return outcome
 
