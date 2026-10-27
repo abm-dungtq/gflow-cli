@@ -55,6 +55,12 @@ from gflow_cli.api.image import (
 from gflow_cli.api.image_upscale import TargetResolution, UpsampleImageRequest
 from gflow_cli.api.transports import transport_choices
 from gflow_cli.api.video import is_media_uuid
+from gflow_cli.auth.auto_renew import (
+    SubmitTracker,
+    run_retry,
+    run_with_auto_renew,
+    try_auto_renew,
+)
 from gflow_cli.config import UiMode, get_settings, parse_jitter_range
 from gflow_cli.data.models import AssetKind, OperationKind
 from gflow_cli.data.recorder import (
@@ -1169,19 +1175,23 @@ def _execute_t2i_batch(
     recorder = OperationRecorder.open(settings)
     try:
         outcomes = asyncio.run(
-            run_image_batch(
-                profile_dir=provider_dir,
-                headless=settings.headless,
-                transport=transport,
-                prompts=batch_prompts,
-                output_dir=output_dir,
-                continue_on_error=continue_on_error,
-                project_title=project_name or _T2I_PROJECT_TITLE,
-                jitter_range=jitter_range,
-                _profile_name=profile_name,
-                _recorder=recorder,
-                _command="image t2i",
-                project_id=project_id,
+            run_with_auto_renew(
+                provider_dir,
+                lambda _tracker: run_image_batch(
+                    profile_dir=provider_dir,
+                    headless=settings.headless,
+                    transport=transport,
+                    prompts=batch_prompts,
+                    output_dir=output_dir,
+                    continue_on_error=continue_on_error,
+                    project_title=project_name or _T2I_PROJECT_TITLE,
+                    jitter_range=jitter_range,
+                    _profile_name=profile_name,
+                    _recorder=recorder,
+                    _command="image t2i",
+                    project_id=project_id,
+                ),
+                source="image.t2i",
             ),
         )
     finally:
@@ -1418,6 +1428,8 @@ async def _run_t2i(
 ) -> None:
     settings = get_settings()
     recorder = OperationRecorder.open(settings)
+    initial_req = req
+    tracker = SubmitTracker()
     project: ProjectInfo | None = None
     undownloaded: list[str] = []
     try:
@@ -1449,6 +1461,7 @@ async def _run_t2i(
                     f"  Generating {count} image(s) ({req.model.value}, {req.aspect.value})...",
                 )
 
+            tracker.mark_submitted()
             images, saved_paths = await _generate_verify_download(
                 client,
                 recorder=recorder,
@@ -1491,6 +1504,24 @@ async def _run_t2i(
                 operation_kind="t2i",
             )
     except Exception as exc:
+        if await try_auto_renew(profile_dir, exc, tracker, source="image.t2i"):
+            return await run_retry(
+                _run_t2i(
+                    profile_name=profile_name,
+                    profile_dir=profile_dir,
+                    headless=headless,
+                    req=initial_req,
+                    count=count,
+                    out=out,
+                    output_root=output_root,
+                    output_file=output_file,
+                    transport=transport,
+                    project_id=project_id,
+                    project_name=project_name,
+                    as_json=as_json,
+                    tool_specs=tool_specs,
+                )
+            )
         # #341: persist the failure before re-raising. A failed download already
         # left a STARTED row for `undownloaded` (#1035); this turns it FAILED.
         record_failed_operation_safe(
@@ -1910,6 +1941,7 @@ async def _run_i2i(
 ) -> None:
     settings = get_settings()
     recorder = OperationRecorder.open(settings)
+    tracker = SubmitTracker()
     req: GenerateImageRequest | None = None
     project: ProjectInfo | None = None
     undownloaded: list[str] = []
@@ -1981,6 +2013,7 @@ async def _run_i2i(
             async def _generate(
                 request: GenerateImageRequest,
             ) -> tuple[list[GeneratedImage], list[Path]]:
+                tracker.mark_submitted()
                 return await _generate_verify_download(
                     client,
                     recorder=recorder,
@@ -2046,6 +2079,24 @@ async def _run_i2i(
                 operation_kind="i2i",
             )
     except Exception as exc:
+        if await try_auto_renew(profile_dir, exc, tracker, source="image.i2i"):
+            return await run_retry(
+                _run_i2i(
+                    profile_name=profile_name,
+                    profile_dir=profile_dir,
+                    headless=headless,
+                    params=params,
+                    count=count,
+                    out=out,
+                    output_root=output_root,
+                    output_file=output_file,
+                    transport=transport,
+                    project_id=project_id,
+                    project_name=project_name,
+                    as_json=as_json,
+                    tool_specs=tool_specs,
+                )
+            )
         # #341: persist the failure before re-raising. ``req`` is None when the
         # failure predates request construction (e.g. project resolution).
         record_failed_operation_safe(

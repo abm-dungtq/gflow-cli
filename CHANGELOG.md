@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Submitted video rows are never automatically retried, and fatal session/lane errors (`Auth*`,
   `RateLimitError`, `WafRejectionError`, `UiSelectorDriftError`, `InsufficientCreditsError`,
   `FlowHostMigratedError`, etc.) halt the batch immediately even under `--continue-on-error`.
+- **One-shot pre-submit session auto-renewal (`GFLOW_CLI_AUTO_RENEW`, default `true`)**.
+  When `gflow image t2i`/`i2i`, `gflow video t2v`/`i2v`/`r2v`, `gflow run`, or `gflow video batch`
+  encounters `AuthExpiredError` or `AuthMissingError` during session open or pre-submit setup
+  (before any generation request is sent), gflow runs `renew_profile` at most once (emitting a
+  structured `auth.auto_renew` event) and retries the command once on success, or re-raises the
+  original error on failure. Auth errors after a generation request has been submitted are never
+  retried. Set `GFLOW_CLI_AUTO_RENEW=false` to disable.
 - **`GFLOW_CLI_WINDOW_MODE` (`offscreen` | `background` | `normal`) for macOS background generation runs**.
   `offscreen` remains the default. On macOS, `background` launches an APFS-cloned
   `LSBackgroundOnly` Google Chrome bundle under `<GFLOW_CLI_HOME>/macos-bg/Google Chrome.app`

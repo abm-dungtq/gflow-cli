@@ -24,6 +24,7 @@ from gflow_cli.api.client import FlowApiClient
 from gflow_cli.api.dto import BatchSubmissionResult, ProjectInfo
 from gflow_cli.api.image import Aspect, GenerateImageRequest, ImageRef, Model, reference_cap_for
 from gflow_cli.api.transports.ui_automation import UiAutomationTransport
+from gflow_cli.auth.auto_renew import mark_current_submitted
 from gflow_cli.config import get_settings, parse_jitter_range
 from gflow_cli.data.models import OperationKind
 from gflow_cli.data.recorder import (
@@ -995,6 +996,8 @@ async def run_sequential_batch(
             if project_id is not None
             else (await client.create_project(title=project_title)).project_id
         )
+        # Rows may be sent from here on: an auth error past this point must not re-run the batch.
+        mark_current_submitted()
         for idx, item in enumerate(items):
             if idx > 0 and jitter_range and jitter_range[1] > 0:
                 delay = random.uniform(*jitter_range)  # noqa: S311 - pacing, not crypto

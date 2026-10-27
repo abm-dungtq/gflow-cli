@@ -35,11 +35,12 @@ from gflow_cli._cli_helpers import (
 from gflow_cli.api.client import FlowApiClient, validate_image_file
 from gflow_cli.api.dto import GeneratedImage
 from gflow_cli.api.transports import EXPERIMENTAL_TRANSPORTS
+from gflow_cli.auth.auto_renew import run_with_auto_renew
 from gflow_cli.config import get_settings
 from gflow_cli.data.recorder import OperationRecorder
 from gflow_cli.data.repository import DataRepository
 from gflow_cli.data.store import DataStore
-from gflow_cli.errors import ConfigurationError, DataStoreError
+from gflow_cli.errors import ConfigurationError, DataStoreError, GFlowError
 from gflow_cli.image_batch import (
     MAX_PROMPTS,
     MIN_PROMPTS,
@@ -449,20 +450,24 @@ async def _run_batch(
     across iterations. On the UI transport Flow's page mints its own reCAPTCHA
     token per submit (#891).
     """
-    outcomes = await run_image_batch(
-        profile_dir=profile_dir,
-        headless=headless,
-        transport=transport,
-        prompts=prompts,
-        output_dir=output_dir,
-        continue_on_error=continue_on_error,
-        project_title="gflow-cli run",
-        client_factory=FlowApiClient,
-        _profile_name=profile_name,
-        _recorder=recorder,
-        _command="run",
-        project_id=project_id,
-        resumed=resumed,
+    outcomes = await run_with_auto_renew(
+        profile_dir,
+        lambda _tracker: run_image_batch(
+            profile_dir=profile_dir,
+            headless=headless,
+            transport=transport,
+            prompts=prompts,
+            output_dir=output_dir,
+            continue_on_error=continue_on_error,
+            project_title="gflow-cli run",
+            client_factory=FlowApiClient,
+            _profile_name=profile_name,
+            _recorder=recorder,
+            _command="run",
+            project_id=project_id,
+            resumed=resumed,
+        ),
+        source="run",
     )
     return outcomes
 
@@ -587,6 +592,11 @@ def run(
                 resumed=resumed,
             ),
         )
+    except GFlowError as exc:
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
+        if exc.remediation_hint:
+            console.print(f"[dim]{escape(exc.remediation_hint)}[/dim]")
+        sys.exit(resolve_exit_code(exc))
     finally:
         recorder.close()
     exit_code = render_image_batch_summary(outcomes, title="gflow run")

@@ -517,6 +517,15 @@ class Settings(BaseSettings):
         ),
     )
     concurrency: int = Field(default=1, ge=1, le=16)
+    auto_renew: bool = Field(
+        default=True,
+        description=(
+            "Automatically run a one-shot session renewal and retry when a "
+            "generation command encounters AuthExpiredError or AuthMissingError "
+            "before submitting a generation request. Set GFLOW_CLI_AUTO_RENEW=false "
+            "to disable."
+        ),
+    )
     update_check: bool = Field(
         default=True,
         description=(

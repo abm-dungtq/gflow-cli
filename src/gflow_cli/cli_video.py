@@ -38,6 +38,7 @@ from gflow_cli.api.video import (
     reference_cap_for,
     validate_duration_for_model,
 )
+from gflow_cli.auth.auto_renew import SubmitTracker, run_retry, try_auto_renew
 from gflow_cli.config import UiMode, get_settings
 from gflow_cli.data.models import AssetKind, OperationKind
 from gflow_cli.data.recorder import OperationRecorder, record_failed_operation_safe
@@ -298,6 +299,9 @@ async def _generate_and_report(
         console.print("[dim]Generating video — this takes ~2 minutes…[/dim]")
     recorder = OperationRecorder.open(settings)
     started_media_ids: list[str] = []
+    initial_request = request
+    initial_project_id = project_id
+    tracker = SubmitTracker()
     try:
         async with FlowApiClient(profile_dir=profile_dir, out_dir=out_dir) as client:
             if project_id is None and project_name is not None:
@@ -346,6 +350,7 @@ async def _generate_and_report(
             resolver_kw: dict[str, Any] = (
                 {} if name_resolver is None else {"name_resolver": name_resolver}
             )
+            tracker.mark_submitted()
             result = await client.generate_video(
                 req=request,
                 project_id=project_id,
@@ -376,6 +381,23 @@ async def _generate_and_report(
                 local_path=result.local_path,
             )
     except Exception as exc:
+        if await try_auto_renew(
+            profile_dir, exc, tracker, source=f"video.{initial_request.mode.value}"
+        ):
+            return await run_retry(
+                _generate_and_report(
+                    profile_name=profile_name,
+                    profile_dir=profile_dir,
+                    request=initial_request,
+                    out_dir=out_dir,
+                    output_file=output_file,
+                    as_json=as_json,
+                    command=command,
+                    project_id=initial_project_id,
+                    project_name=project_name,
+                    tool_specs=tool_specs,
+                )
+            )
         # #341: persist the failure before re-raising — the STARTED row (if
         # on_started fired) is updated to FAILED, else a fresh row is inserted.
         record_failed_operation_safe(

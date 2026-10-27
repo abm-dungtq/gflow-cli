@@ -306,6 +306,12 @@ Until the #1041 fix this setting was ignored and every command logged at `INFO` 
 **Recommended starting point:** `1` until a concurrent caller lands. Each additional Page would cost ~30–60 MiB of memory on Chromium headless; don't exceed `8` without measuring resident-set size. Cookies and storage state are shared at Context level, so every Page would inherit the signed-in profile for free.
 **Shipped in:** v0.4.0a2.
 
+### `GFLOW_CLI_AUTO_RENEW`
+
+**What:** One-shot pre-submit session renewal on `AuthExpiredError` or `AuthMissingError` for CLI generation commands (`gflow image t2i`/`i2i`, `gflow video t2v`/`i2v`/`r2v`, `gflow run`, and `gflow video batch`). When an auth error occurs during session open or pre-submit setup (before any generation request is sent), gflow calls `renew_profile` at most once and, if renewal succeeds, retries the command once from the beginning. Auth errors after a generation request has been submitted are never auto-renewed or retried.
+**Values:** `true` | `false`
+**Default:** `true`
+
 ### `GFLOW_CLI_UPDATE_CHECK`
 
 **What:** Once-a-day best-effort PyPI check that shows an update banner on stderr when a newer gflow-cli exists — a bordered panel with the new version, `gflow update`, and the release-notes link when stderr is a terminal; one plain yellow line when piped. The notice is always served from a local cache (`<GFLOW_CLI_HOME>/update_check.json`); a stale cache refreshes on a background daemon thread whose result feeds the *next* invocation — the check never blocks or fails a command, and a failed poll still counts toward the once-a-day cap. `gflow update` / `gflow update --check` refresh the same cache synchronously.

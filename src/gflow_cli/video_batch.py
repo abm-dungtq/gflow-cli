@@ -29,6 +29,11 @@ from gflow_cli.api.video import (
     VideoStarted,
     validate_duration_for_model,
 )
+from gflow_cli.auth.auto_renew import (
+    current_tracker,
+    mark_current_submitted,
+    run_with_auto_renew,
+)
 from gflow_cli.config import get_settings, parse_jitter_range
 from gflow_cli.data.models import OperationKind
 from gflow_cli.data.recorder import OperationRecorder, record_failed_operation_safe
@@ -764,6 +769,26 @@ async def run_video_batch(
     if resumed and all(item.index in resumed for item in videos):
         return [resumed[item.index] for item in videos], project_id
 
+    if current_tracker() is None:
+        return await run_with_auto_renew(
+            profile_dir,
+            lambda _tracker: run_video_batch(
+                profile_dir=profile_dir,
+                headless=headless,
+                videos=videos,
+                output_dir=output_dir,
+                continue_on_error=continue_on_error,
+                project_title=project_title,
+                profile_name=profile_name,
+                recorder=recorder,
+                project_id=project_id,
+                resumed=resumed,
+                jitter_range=jitter_range,
+                client_factory=client_factory,
+            ),
+            source="video.batch",
+        )
+
     outcomes: list[VideoBatchOutcome] = []
     factory = client_factory or FlowApiClient
     submitted_count = 0
@@ -772,6 +797,7 @@ async def run_video_batch(
     async with factory(profile_dir=profile_dir, headless=headless) as client:
         if run_project_id is None:
             run_project_id = str((await client.create_project(title=project_title)).project_id)
+        mark_current_submitted()
         for pos, item in enumerate(videos):
             if resumed and (done := resumed.get(item.index)) is not None:
                 outcomes.append(replace(done, project_id=run_project_id))
