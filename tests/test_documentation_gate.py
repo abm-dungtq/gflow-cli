@@ -91,11 +91,9 @@ CURRENT_OPERATOR_DOCS: tuple[str, ...] = (
 )
 
 
-def test_current_docs_do_not_instruct_video_batch() -> None:
-    for rel_path in CURRENT_OPERATOR_DOCS:
-        text = (ROOT / rel_path).read_text(encoding="utf-8")
-
-        assert "gflow video batch" not in text, f"{rel_path} still references gflow video batch"
+def test_current_docs_document_video_batch_config() -> None:
+    usage_text = (ROOT / "docs/USAGE.md").read_text(encoding="utf-8")
+    assert "gflow video batch --config" in usage_text
 
 
 def test_changelog_unreleased_notes_video_batch_removal() -> None:

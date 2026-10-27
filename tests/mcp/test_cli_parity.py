@@ -150,6 +150,7 @@ _MCP_EXEMPT: dict[str, str] = {
     "doctor": "interactive diagnostic; MCP tool deferred (#542)",
     "image batch": "batch pipelines — not yet ported",
     "image upload": "asset upload — covered indirectly by reference_images paths",
+    "video batch": "video-batch config runner (sequential i2v in one session) — not yet ported",
     "video chain": "chain pipeline — not yet ported",
     "movie run": "movie pipeline — not yet ported (skills-audit Task 7 backlog)",
     "movie template": "movie pipeline — not yet ported (skills-audit Task 7 backlog)",

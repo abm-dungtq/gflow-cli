@@ -45,12 +45,13 @@ from gflow_cli.image_batch import (
     MIN_PROMPTS,
     BatchOutcome,
     BatchPromptItem,
-    batch_parent,
+    batch_parents,
     order_batch_rows,
     parse_batch_item_dict,
     render_image_batch_summary,
     resolve_exit_code,
     run_image_batch,
+    target_for_batch_item_image,
 )
 from gflow_cli.paths import resolve_batch_output_dir
 
@@ -65,31 +66,83 @@ _ALLOWED_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_file_ref(item: BatchPromptItem, base_dir: Path) -> BatchPromptItem:
-    """Resolve a row's local-file ``ref`` and check it is an image, or refuse (exit 11).
-
-    Relative paths resolve against the config file's folder. Symlinks are resolved
-    strictly, and the image check (size, magic bytes) is the one every upload applies:
-    a manifest must not be a way to send ``~/.ssh/id_rsa`` to Google.
-    """
-    if item.ref is None or item.ref.startswith("batch:"):
-        return item
-    raw = Path(item.ref).expanduser()
-    target = raw if raw.is_absolute() else base_dir / raw
+def _validate_local_ref_file(raw_ref: str, *, label: str, base_dir: Path) -> str:
+    """Resolve one local reference image path and verify it is a valid image."""
+    raw = Path(raw_ref).expanduser()
+    if raw.is_absolute():
+        target = raw
+    elif (base_dir / raw).exists():
+        target = base_dir / raw
+    elif raw.exists():
+        target = raw
+    else:
+        target = base_dir / raw
     try:
         resolved = target.resolve(strict=True)
     except OSError:
-        msg = f"prompts[{item.index}].ref {item.ref!r} does not exist (relative to {base_dir})."
+        msg = f"{label} {raw_ref!r} does not exist (relative to {base_dir})."
         raise ConfigurationError(msg) from None
     if not resolved.is_file():
-        msg = f"prompts[{item.index}].ref {item.ref!r} is not a file."
+        msg = f"{label} {raw_ref!r} is not a file."
         raise ConfigurationError(msg)
     try:
         asyncio.run(validate_image_file(resolved))
     except (ValueError, OSError) as exc:
-        msg = f"prompts[{item.index}].ref {item.ref!r}: {exc}"
+        msg = f"{label} {raw_ref!r}: {exc}"
         raise ConfigurationError(msg) from None
-    return replace(item, ref=str(resolved))
+    return str(resolved)
+
+
+def _resolve_output_path(raw_output: str, *, idx: int, base_dir: Path) -> str:
+    """Resolve a row's ``output`` file path and reject existing directories."""
+    p = Path(raw_output).expanduser()
+    if not p.is_absolute():
+        if (base_dir / p).exists() or (p.parent != Path() and (base_dir / p.parent).exists()):
+            p = base_dir / p
+        elif p.exists() or (p.parent != Path() and p.parent.exists()):
+            pass
+        else:
+            p = base_dir / p
+    if p.exists() and p.is_dir():
+        msg = f"prompts[{idx}].output {raw_output!r} is an existing directory."
+        raise ConfigurationError(msg)
+    return str(p)
+
+
+def _resolve_file_ref(item: BatchPromptItem, base_dir: Path) -> BatchPromptItem:
+    """Resolve a row's local-file ``ref``/``refs`` and ``output``, or refuse (exit 11).
+
+    Relative paths resolve against the config file's folder (with fallback to CWD when
+    the caller provides a CWD-relative path). Symlinks are resolved strictly, and the
+    image check (size, magic bytes) is the one every upload applies: a manifest must
+    not be a way to send ``~/.ssh/id_rsa`` to Google.
+    """
+    resolved_ref = item.ref
+    if item.ref is not None and not item.ref.startswith("batch:"):
+        resolved_ref = _validate_local_ref_file(
+            item.ref,
+            label=f"prompts[{item.index}].ref",
+            base_dir=base_dir,
+        )
+    resolved_refs: tuple[str, ...] = item.refs
+    if item.refs:
+        resolved_list: list[str] = []
+        for r_idx, ref_spec in enumerate(item.refs):
+            if ref_spec.startswith("batch:"):
+                resolved_list.append(ref_spec)
+            else:
+                resolved_list.append(
+                    _validate_local_ref_file(
+                        ref_spec,
+                        label=f"prompts[{item.index}].refs[{r_idx}]",
+                        base_dir=base_dir,
+                    )
+                )
+        resolved_refs = tuple(resolved_list)
+    resolved_output = item.output
+    if item.output is not None:
+        resolved_output = _resolve_output_path(item.output, idx=item.index, base_dir=base_dir)
+    return replace(item, ref=resolved_ref, refs=resolved_refs, output=resolved_output)
 
 
 @dataclass(frozen=True)
@@ -202,34 +255,69 @@ class BatchConfig:
 # ---------------------------------------------------------------------------
 
 
-def _resumed_rows(
-    prompts: tuple[BatchPromptItem, ...], output_dir: Path, project_id: str, profile_name: str
-) -> dict[int, BatchOutcome]:
-    """Rows a previous run already made in ``project_id`` (#934), by row index.
+def _is_valid_image_on_disk(path: Path) -> bool:
+    """Return True if ``path`` is a non-empty regular file with image magic bytes."""
+    try:
+        if not path.is_file():
+            return False
+        size = path.stat().st_size
+        if size <= 0 or size > 20 * 1024 * 1024:
+            return False
+        with path.open("rb") as fh:
+            head = fh.read(12)
+    except OSError:
+        return False
+    return head.startswith((b"\x89PNG", b"\xff\xd8\xff", b"GIF87a", b"GIF89a")) or (
+        len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"WEBP"
+    )
 
-    A row counts only when EVERY file it writes (``<stem>_<n>.<ext>``) exists, the catalog
-    records exactly those bytes at that path as an image of this profile in this project,
-    and its recorded prompt is the row's: a renamed, overwritten or re-prompted file is not
-    the row's output (#934 review). A parent some ``batch:N`` row references also needs its
-    Flow display name, which an in-place reference searches by, and a child is only
-    resumed with its parent. Anything less regenerates the row. The default ``output_dir``
-    is dated, so resuming on another day needs the same ``--output-dir`` or config value.
+
+def _candidate_output_files(item: BatchPromptItem, output_dir: Path, n: int) -> list[Path]:
+    """Candidate on-disk files for image ``n`` of ``item`` (accounting for #96 extension fix)."""
+    if item.output is not None:
+        base_target = target_for_batch_item_image(item, output_dir, n)
+        candidates = [
+            base_target,
+            *(
+                base_target.with_suffix(ext)
+                for ext in (".png", ".jpg", ".jpeg", ".webp")
+                if ext != base_target.suffix.lower()
+            ),
+        ]
+        return [p for p in candidates if p.is_file()]
+    stem = glob.escape(item.output_filename or f"prompt_{item.index}")
+    return [p for p in sorted(output_dir.glob(f"{stem}_{n}.*")) if p.is_file()]
+
+
+def _resumed_rows(
+    prompts: tuple[BatchPromptItem, ...],
+    output_dir: Path,
+    project_id: str | None,
+    profile_name: str,
+) -> dict[int, BatchOutcome]:
+    """Rows a previous run already made (#934), by row index.
+
+    For rows using ``output_dir``/``output_filename``, a row counts only when EVERY file it
+    writes (``<stem>_<n>.<ext>``) exists, the catalog records exactly those bytes at that
+    path as an image of this profile in ``project_id``, and its recorded prompt is the row's.
+    For rows with an explicit ``output`` file path, an existing valid image file at that path
+    (or its magic-byte-corrected sibling extension) also resumes the row when no ``batch:N``
+    child requires a catalog display name.
     """
-    parents = {p for item in prompts if (p := batch_parent(item)) is not None}
+    parents = {p for item in prompts for p in batch_parents(item)}
     done: dict[int, BatchOutcome] = {}
     try:
         with DataStore.open(get_settings().resolved_db_path()) as store:
             repo = DataRepository(store)
             for item in prompts:
-                stem = glob.escape(item.output_filename or f"prompt_{item.index}")
                 paths: list[Path] = []
                 images: list[GeneratedImage] = []
                 for n in range(item.count):
-                    # The extension is the bytes' (#96 saves a JPEG as .jpg), not .png.
+                    candidates = _candidate_output_files(item, output_dir, n)
                     found = [
                         (path, seed)
-                        for path in sorted(output_dir.glob(f"{stem}_{n}.*"))
-                        if path.is_file()
+                        for path in candidates
+                        if project_id is not None
                         and (
                             seed := repo.resolve_seed_image_by_file(
                                 profile_name,
@@ -240,25 +328,59 @@ def _resumed_rows(
                         and seed.flow_project_id == project_id
                         and seed.prompt in (item.text, item.original_prompt)
                     ]
-                    if not found:
-                        break
-                    path, seed = found[0]
-                    paths.append(path)
-                    asset = repo.get_asset_by_flow_media_id(profile_name, seed.flow_media_id)
-                    name = asset.metadata_json.get("display_name") if asset else None
-                    images.append(
-                        GeneratedImage(
-                            media_name=seed.flow_media_id,
-                            workflow_id=seed.flow_workflow_id or "",
-                            seed=0,
-                            prompt=item.text,
-                            model_name_type=seed.model,
-                            aspect_ratio=seed.aspect_ratio or "",
-                            fife_url="",
-                            dimensions=(seed.width or 0, seed.height or 0),
-                            display_name=name if isinstance(name, str) and name else None,
+                    if found:
+                        path, seed = found[0]
+                        paths.append(path)
+                        asset = repo.get_asset_by_flow_media_id(profile_name, seed.flow_media_id)
+                        name = asset.metadata_json.get("display_name") if asset else None
+                        images.append(
+                            GeneratedImage(
+                                media_name=seed.flow_media_id,
+                                workflow_id=seed.flow_workflow_id or "",
+                                seed=0,
+                                prompt=item.text,
+                                model_name_type=seed.model,
+                                aspect_ratio=seed.aspect_ratio or "",
+                                fife_url="",
+                                dimensions=(seed.width or 0, seed.height or 0),
+                                display_name=name if isinstance(name, str) and name else None,
+                            )
                         )
-                    )
+                        continue
+                    if item.output is not None:
+                        valid_files = [p for p in candidates if _is_valid_image_on_disk(p)]
+                        if valid_files:
+                            path = valid_files[0]
+                            # If the catalog knows this file in this project under a DIFFERENT
+                            # prompt, the row's prompt was edited and must be regenerated.
+                            if project_id is not None:
+                                existing_seed = repo.resolve_seed_image_by_file(
+                                    profile_name,
+                                    path.resolve(),
+                                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                                )
+                                if (
+                                    existing_seed is not None
+                                    and existing_seed.flow_project_id == project_id
+                                    and existing_seed.prompt
+                                    not in (item.text, item.original_prompt)
+                                ):
+                                    break
+                            paths.append(path)
+                            images.append(
+                                GeneratedImage(
+                                    media_name=f"resumed-{item.index}-{n}",
+                                    workflow_id="",
+                                    seed=0,
+                                    prompt=item.text,
+                                    model_name_type=item.model,
+                                    aspect_ratio=item.aspect_ratio,
+                                    fife_url="",
+                                    dimensions=(0, 0),
+                                )
+                            )
+                            continue
+                    break
                 complete = len(images) == item.count
                 if complete and (item.index not in parents or images[0].display_name):
                     done[item.index] = BatchOutcome(
@@ -270,9 +392,7 @@ def _resumed_rows(
                     )
         # A child built from a parent that is about to be regenerated is stale too.
         while stale := [
-            i
-            for i, o in done.items()
-            if (p := batch_parent(o.prompt)) is not None and p not in done
+            i for i, o in done.items() if any(p not in done for p in batch_parents(o.prompt))
         ]:
             for i in stale:
                 del done[i]
@@ -439,7 +559,10 @@ def run(
         console.print("  mode: [yellow]fail-fast[/yellow]")
     resumed: dict[int, BatchOutcome] = {}
     if resume:
-        if not project_id:
+        needs_project = any(
+            item.output is None or bool(batch_parents(item)) for item in cfg.prompts
+        )
+        if not project_id and needs_project:
             err = ConfigurationError(
                 detail="--resume needs the run's project: pass --project <id> or set 'project'"
             )

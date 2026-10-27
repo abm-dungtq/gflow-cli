@@ -2568,3 +2568,184 @@ async def _run_video_upscale(
             out_path=out_path,
         )
         console.print(f"[bold green]Saved:[/bold green] {safe_path_text(target)}")
+
+
+@video.command(
+    "batch",
+    short_help="Run a JSON-described batch of image-to-video generations in one browser session.",
+    help=(
+        "Execute a JSON-described batch of image-to-video (i2v) generations sequentially "
+        "through a single FlowApiClient browser session and shared Flow project.\n\n"
+        "\b\n"
+        "Examples:\n"
+        "  gflow video batch --config clips.json\n"
+        "  gflow video batch --config clips.json --profile my-profile --project PROJ123 --resume\n"
+        "  gflow video batch --config clips.json --fail-fast --jitter 3-6 --json\n"
+    ),
+)
+@click.option(
+    "-c",
+    "--config",
+    "config_path",
+    required=True,
+    type=click.Path(path_type=Path, dir_okay=False),
+    help="Path to the JSON video batch configuration file.",
+)
+@click.option(
+    "--output-dir",
+    "--out-dir",
+    "output_dir_override",
+    type=click.Path(path_type=Path, file_okay=False),
+    default=None,
+    help="Override output directory for rows without an explicit 'output' path.",
+)
+@click.option("--profile", default=None, help="Override profile (beats config's 'profile').")
+@_project_option
+@_project_name_option
+@click.option(
+    "--continue-on-error/--fail-fast",
+    default=True,
+    show_default=True,
+    help="Keep going after per-row failures, or halt on first failure.",
+)
+@click.option(
+    "--resume",
+    is_flag=True,
+    default=False,
+    help="Skip rows whose output .mp4 file already exists and is a valid video file.",
+)
+@click.option(
+    "--jitter",
+    default=None,
+    help=(
+        "Inter-submission pacing delay in seconds ('MIN-MAX', 'N', or '0' to disable; "
+        "defaults to 2.0-5.0s or GFLOW_CLI_JITTER_RANGE)."
+    ),
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    default=False,
+    help="Emit machine-readable JSON summary and per-row outcomes on stdout.",
+)
+def batch(
+    config_path: Path,
+    output_dir_override: Path | None,
+    profile: str | None,
+    project_id: str | None,
+    project_name: str | None,
+    continue_on_error: bool,
+    resume: bool,
+    jitter: str | None,
+    as_json: bool,
+) -> None:
+    """Execute a JSON-described batch of image-to-video generations sequentially."""
+    import asyncio
+    import sys
+
+    from rich.markup import escape
+
+    from gflow_cli._cli_helpers import safe_path_text
+    from gflow_cli.image_batch import resolve_exit_code
+    from gflow_cli.paths import resolve_batch_output_dir
+    from gflow_cli.video_batch import (
+        VideoBatchConfig,
+        VideoBatchOutcome,
+        build_video_batch_json_payload,
+        compute_video_batch_exit_code,
+        render_video_batch_summary,
+        resolve_video_batch_jitter_range,
+        resumed_video_rows,
+        run_video_batch,
+    )
+
+    try:
+        cfg = VideoBatchConfig.from_json_path(config_path)
+        jitter_range = resolve_video_batch_jitter_range(jitter)
+    except ConfigurationError as exc:
+        if as_json:
+            json_output.emit(
+                {
+                    **exc.to_problem_details(),
+                    "status": "error",
+                    "command": "video batch",
+                }
+            )
+        else:
+            console.print(f"[red]Config error:[/red] {escape(str(exc))}")
+        sys.exit(resolve_exit_code(exc))
+
+    profile_name = _resolve_profile(profile or cfg.profile)
+    provider_dir = _make_provider_dir(profile_name)
+    settings = get_settings()
+    output_dir = resolve_batch_output_dir(
+        cli_override=output_dir_override,
+        config_value=cfg.output_dir,
+        output_root=settings.output_dir,
+        kind="videos",
+    )
+    resolved_project = default_project(project_id or cfg.project, project_name, profile_name)
+    title = slugify_project_name(project_name) if project_name else "gflow-cli video batch"
+
+    resumed_map: dict[int, VideoBatchOutcome] = {}
+    if resume:
+        resumed_map = resumed_video_rows(cfg.videos, output_dir)
+
+    if not as_json:
+        console.print(
+            f"\n[bold]gflow video batch[/bold] · profile=[bold]{profile_name}[/bold] "
+            f"· {len(cfg.videos)} video(s)"
+        )
+        console.print(f"  output_dir: [dim]{safe_path_text(output_dir)}[/dim]")
+        if resolved_project:
+            console.print(f"  project: [dim]{resolved_project}[/dim] [dim](existing)[/dim]")
+        if not continue_on_error:
+            console.print("  mode: [yellow]fail-fast[/yellow]")
+        if resume:
+            console.print(f"  resume: [dim]{len(resumed_map)} row(s) already made[/dim]")
+
+    recorder = OperationRecorder.open(settings)
+    try:
+        outcomes, final_project_id = asyncio.run(
+            run_video_batch(
+                profile_dir=provider_dir,
+                headless=settings.headless,
+                videos=cfg.videos,
+                output_dir=output_dir,
+                continue_on_error=continue_on_error,
+                project_title=title,
+                profile_name=profile_name,
+                recorder=recorder,
+                project_id=resolved_project,
+                resumed=resumed_map,
+                jitter_range=jitter_range,
+            )
+        )
+    except GFlowError as exc:
+        if as_json:
+            json_output.emit(
+                {
+                    **exc.to_problem_details(),
+                    "status": "error",
+                    "command": "video batch",
+                }
+            )
+        else:
+            console.print(f"[red]Error:[/red] {escape(str(exc))}")
+        sys.exit(resolve_exit_code(exc))
+    finally:
+        recorder.close()
+
+    if as_json:
+        payload = build_video_batch_json_payload(
+            outcomes,
+            profile_name=profile_name,
+            project_id=final_project_id,
+        )
+        json_output.emit(payload)
+        exit_code = compute_video_batch_exit_code(outcomes)
+    else:
+        exit_code = render_video_batch_summary(outcomes, title="gflow video batch")
+    if exit_code != 0:
+        sys.exit(exit_code)

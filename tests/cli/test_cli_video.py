@@ -1497,39 +1497,31 @@ class TestI2VAssetRef:
 
 
 # ---------------------------------------------------------------------------
-# `video batch` removal (Task 1, production-readiness-hardening): the stub
-# never worked (always printed "not yet available" and exited 1). It must be
-# gone from the Click group entirely — not just erroring a different way.
+# ---------------------------------------------------------------------------
+# `video batch --config`: sequential i2v batch runner in one browser session.
 # ---------------------------------------------------------------------------
 
 
-def test_video_help_does_not_advertise_batch() -> None:
-    """`batch` must not be registered on the video Click group, and must not
-    appear in `gflow video --help`'s output (registration-level check, not
-    just a substring scan, so this can't false-positive on incidental prose)."""
-    assert "batch" not in video.commands
+def test_video_help_advertises_batch() -> None:
+    """`batch` is registered on the video Click group and shown in `gflow video --help`."""
+    assert "batch" in video.commands
     result = CliRunner().invoke(video, ["--help"])
     assert result.exit_code == 0
-    assert "batch" not in result.output
+    assert "batch" in result.output
 
 
-def test_video_batch_is_rejected_before_profile_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`video batch` must be rejected by Click's own command routing (exit 2,
-    "No such command") without ever reaching profile resolution.
-
-    A tripwire on `_resolve_profile` (rather than merely asserting on the exit
-    code) rules out the coincidental case where a still-registered stub fails
-    for an unrelated reason (e.g. no profile configured) that happens to also
-    exit 2.
-    """
+def test_video_batch_without_config_is_rejected_before_profile_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`video batch` without `--config` is rejected by Click (exit 2) before profile resolution."""
 
     def _must_not_run(*_a: object, **_k: object) -> str:
-        raise AssertionError("_resolve_profile must not run for a removed command")
+        raise AssertionError("_resolve_profile must not run when --config is missing")
 
     monkeypatch.setattr("gflow_cli.cli_video._resolve_profile", _must_not_run)
     result = CliRunner().invoke(video, ["batch", "manifest.tsv"])
     assert result.exit_code == 2
-    assert "No such command" in result.output
+    assert "--config" in result.output or "Got unexpected extra argument" in result.output
 
 
 def test_image_batch_remains_a_leaf_command() -> None:

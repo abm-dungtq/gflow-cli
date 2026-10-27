@@ -904,18 +904,69 @@ gflow image t2i "a red bicycle"      # lands in my-batch
 gflow video t2v "a tram at dusk"     # so does this
 ```
 
-## Batch video generation (shell loop)
+## Batch video generation (`gflow video batch`)
 
-`gflow video` has no `batch` subcommand — a manifest-driven video runner
-was scaffolded early on but never worked and was removed. `gflow image
-batch` (manifest-driven image generation) is unaffected and still ships. For
-video, drive sequential generations through a plain shell loop instead.
-Without `--project`, each `gflow video t2v` / `i2v` / `r2v` call opens its
-**own Flow project**, so the resulting videos will NOT share a `project_id`
-(unlike `gflow image batch`, which mounts one project across all prompts) —
-but they DO get generated and downloaded. Pass the same `--project <id>` to
-every call in the loop (see "Sharing one project across calls" above) if you
-want them to land in one project instead:
+Run sequential image-to-video (`i2v`) generations from a JSON config file in **one** browser session and **one** shared Flow project:
+
+```bash
+gflow video batch --config videos.json
+gflow video batch --config videos.json --profile meo-muop --resume --continue-on-error
+gflow video batch --config videos.json --fail-fast --jitter 3.0-6.0 --json
+```
+
+### `videos.json` schema
+
+```json
+{
+  "profile": "meo-muop",
+  "project": "optional-existing-project-id",
+  "output_dir": "gen/clips",
+  "videos": [
+    {
+      "start": "gen/k1.jpg",
+      "prompt_file": "prompts/v1.txt",
+      "model": "omni-flash",
+      "duration": 4,
+      "aspect": "9:16",
+      "output": "gen/v1.mp4"
+    },
+    {
+      "start": "gen/k2.jpg",
+      "prompt": "Cockroach jumps onto the keyboard, speaking to the viewer",
+      "model": "omni-flash",
+      "duration": 6,
+      "aspect": "9:16",
+      "output": "gen/v2.mp4"
+    }
+  ]
+}
+```
+
+| Key | Required | Default | Notes |
+|---|---|---|---|
+| `videos` | **yes** | — | 1–50 entries. |
+| `videos[].start` | **yes** | — | Local initial-frame image path (resolved against the config file's folder if relative; validated before opening Chrome). |
+| `videos[].prompt` | one of `prompt` / `prompt_file` | — | Inline prompt text (1–2000 chars). Mutually exclusive with `prompt_file`. |
+| `videos[].prompt_file` | one of `prompt` / `prompt_file` | — | Path to a UTF-8 text file containing the prompt (resolved against the config file's folder if relative). |
+| `videos[].model` | no | `omni-flash` | Any `i2v` model (`omni-flash`, `veo-3.1-fast`, `veo-3.1-fast-lower-priority`, `veo-3.1-quality`, `veo-2-fast`, `veo-2-quality`). |
+| `videos[].duration` | no | model default | `4`, `6`, `8`, or `10` (validated per model before the browser starts; e.g. `10` requires `omni-flash`). |
+| `videos[].aspect` | no | `9:16` | `9:16` / `16:9` (or `portrait` / `landscape`). |
+| `videos[].output` | no | `<output_dir>/video_<index>.mp4` | Explicit `.mp4` path for this row (resolved against the config file's folder if relative). |
+| `videos[].end` | no | — | Optional local end-frame image path. |
+| `videos[].resolution` | no | — | Optional `"360p"` or `"720p"`. |
+| `profile` | no | active profile | CLI `--profile` overrides. |
+| `project` | no | new `gflow-cli video batch` project | Existing Flow project id. CLI `--project` overrides. |
+| `output_dir` | no | `$GFLOW_CLI_OUTPUT_DIR/videos/<YYYY-MM-DD>/` | CLI `--output-dir` overrides. |
+
+### Options & error semantics
+
+- **Single browser session:** Chrome opens once for the entire batch and reuses one Flow project across all rows. If `--resume` finds that every row's target `.mp4` already exists and is a valid video container on disk, `gflow video batch` exits `0` immediately without launching a browser.
+- **No automatic retry on submitted video rows:** To avoid double-spending credits or duplicating clips, a submitted video row is never automatically retried. Re-run with `--resume` to skip already-downloaded `.mp4` files and run only the remaining rows.
+- **Fatal session/lane errors always abort immediately:** Authentication errors (`exit 3`), rate limits (`exit 4`), WAF/reCAPTCHA rejection (`exit 10`), profile/config errors (`exit 11`), closed browser session (`exit 15`), database errors (`exit 16`), UI selector drift (`exit 23`), host migration (`exit 36`), and insufficient credits (`exit 37`) stop the batch immediately even under `--continue-on-error` and exit with that error's code. Per-row generation failures (such as content policy refusal) continue to the next row under `--continue-on-error` (default) or stop under `--fail-fast`.
+
+### Shell loop alternative (for `t2v` / `r2v`)
+
+For text-to-video (`t2v`) or reference-to-video (`r2v`), drive sequential generations through a shell loop and share one `--project <id>` across calls:
 
 ```bash
 # bash / WSL / macOS — one prompt per line
@@ -930,12 +981,6 @@ Get-Content prompts.txt | ForEach-Object {
   gflow video t2v $_ --aspect 9:16
 }
 ```
-
-The trade-off vs. a manifest runner: separate `project_id`s mean each
-generation re-mints a reCAPTCHA (a few extra seconds per shot) and the
-videos won't appear together in your Flow gallery. The same pattern works
-for `gflow video i2v <image> "<prompt>"` and
-`gflow video r2v "<prompt>" --ref <img>`.
 
 ## Making a video longer than 8 seconds — which command?
 
@@ -1934,8 +1979,10 @@ catalog has not seen yet is recorded without one, as with `t2i --project`).
 | `prompts[].aspect_ratio` | no | `9:16` | `9:16` / `16:9` / `1:1` / `4:3` / `3:4`. |
 | `prompts[].model` | no | `nano2` | Any image `--model` value: `nano2`, `nano2.1`, `nano-2.1`, `nano-pro`, `nano2-lite`, `image4`, `imagen4`. |
 | `prompts[].count` | no | `1` | 1–4. |
-| `prompts[].output_filename` | no | `prompt_<index>` | Filename stem; saved as `<stem>_<image-index>.png`. |
-| `prompts[].ref` | no | — | `"batch:N"` (generate from row N's image) or a local image file. See [Referencing an earlier row](#referencing-an-earlier-row) and [Referencing a local file](#referencing-a-local-file). |
+| `prompts[].output_filename` | no | `prompt_<index>` | Filename stem; saved as `<stem>_<image-index>.png` inside `output_dir`. |
+| `prompts[].output` | no | — | Explicit output file path for this row (requires `count == 1`; relative paths resolve against the config file's folder; extension is corrected from magic bytes on download). |
+| `prompts[].ref` | no | — | Single reference: `"batch:N"` (generate from row N's image) or a local image file. Mutually exclusive with `refs`. See [Referencing an earlier row](#referencing-an-earlier-row) and [Referencing a local file](#referencing-a-local-file). |
+| `prompts[].refs` | no | — | Non-empty list of references (`["ref1.png", "ref2.png"]`, optionally mixed with `"batch:N"`), up to the row model's reference cap (default 10; 4 for `imagen4`). Mutually exclusive with `ref`. |
 | `profile` | no | active profile | CLI `--profile` overrides. |
 | `transport` | no | `ui_automation` | Experimental strategies need `GFLOW_CLI_EXPERIMENTAL_TRANSPORTS=1`. |
 | `output_dir` | no | `out/<UTC-timestamp>/` | CLI `--output-dir` overrides. |
@@ -1992,20 +2039,28 @@ that row's position in `prompts` (0-based).
 - **Measured on flow.google.com** (2026-10-01). An account served labs takes a different
   driver, which references the image by its media id; that arm has not been observed.
 
-### Referencing a local file
+### Referencing a local file (or multiple files with `refs`)
 
-A row's `ref` can also be a local image: `"ref": "refs/product.png"`.
+A row's `ref` can also be a local image (`"ref": "refs/product.png"`), or a row can pass
+multiple references via `"refs": ["nv-tieu-cuong.png", "bg-ban-dem.png"]` (up to the model's
+reference cap; `ref` and `refs` cannot both be set on the same row):
 
 - **Resolved against the config file's folder** (an absolute path also works), so a config
-  and its images move together. The file must exist and be a real image (PNG, JPEG, WebP or
+  and its images move together. Every file must exist and be a real image (PNG, JPEG, WebP or
   GIF, up to 20 MB) before the browser starts; anything else is refused (exit 11).
-- **Uploaded once per run.** The first row that names a file uploads it into the run's
-  project; every row that names the same file references that upload in place. The
-  project holds one copy.
+- **Uploaded once per run across `ref` and `refs`.** The first row that names a file uploads it
+  into the run's project; every subsequent row in the same run that names the same file
+  (whether via `ref` or `refs`) references that upload in place without re-uploading. The
+  project holds one copy per distinct local path.
+- **Explicit per-row `output` path and `--resume`.** When a row sets `"output": "gen/vuong/k1.jpg"`
+  (valid when `count == 1`), the downloaded image is written directly to that path (with its
+  extension adjusted if Flow returns JPEG/PNG/WebP magic bytes that differ from the requested
+  suffix). With `--resume`, if that `output` file already exists on disk (including under its
+  magic-byte-corrected suffix) and is a valid image, the row is marked `RESUMED` and skipped
+  even without `--project`; if all rows in the config are already satisfied on disk, `gflow run`
+  exits `0` without opening Chrome.
 - **A failed upload** fails that row with the reason; a later row naming the same file
   tries the upload again.
-- **Not resumable.** A re-run uploads the file again, into its new project (or, with
-  `--project`, into that same project).
 - **Measured on flow.google.com** (2026-10-01). When Flow serves the project from labs,
   the file goes through the REST upload instead; that path has not been observed live.
   `GFLOW_CLI_FLOW_HOST=labs.google` on a project Flow serves from flow.google.com is

@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`gflow run --config` multi-reference (`refs`) and per-row `output` support**.
+  Each `prompts[]` row now accepts `"refs": ["path/to/ref1.png", ...]` (up to the model's
+  reference cap, optionally mixed with `"batch:N"`; mutually exclusive with `"ref"`) and
+  `"output": "path/to/file.jpg"` (for `count == 1`). Distinct local reference images across
+  `ref` and `refs` are uploaded once per run into the shared Flow project and referenced in
+  place on subsequent rows. With `--resume`, rows whose `output` file already exists as a valid
+  image on disk are marked `RESUMED` and skipped (and if all rows are already satisfied on
+  disk, no browser is opened).
+- **`gflow video batch --config <file.json>` sequential `i2v` batch runner in a single browser session**.
+  Runs 1–50 image-to-video (`i2v`) rows sequentially inside one `FlowApiClient` session and one
+  shared Flow project (`start`, `prompt` or `prompt_file`, `model`, `duration`, `aspect`,
+  `output`, optional `end` and `resolution`), supporting `--profile`, `--project`,
+  `--continue-on-error/--fail-fast`, `--resume`, `--jitter` (default `2.0–5.0` s), and `--json`.
+  Submitted video rows are never automatically retried, and fatal session/lane errors (`Auth*`,
+  `RateLimitError`, `WafRejectionError`, `UiSelectorDriftError`, `InsufficientCreditsError`,
+  `FlowHostMigratedError`, etc.) halt the batch immediately even under `--continue-on-error`.
 - **`GFLOW_CLI_WINDOW_MODE` (`offscreen` | `background` | `normal`) for macOS background generation runs**.
   `offscreen` remains the default. On macOS, `background` launches an APFS-cloned
   `LSBackgroundOnly` Google Chrome bundle under `<GFLOW_CLI_HOME>/macos-bg/Google Chrome.app`

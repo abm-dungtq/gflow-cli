@@ -1628,10 +1628,11 @@ def batch(
             default_model=model,
         )
         for row in prompts:
-            if row.ref is not None:
+            if row.ref is not None or row.refs:
+                field_name = "refs" if row.refs else "ref"
                 # The stay-mounted batch path cannot reference an earlier row (#913).
                 msg = (
-                    f"prompts[{row.index}].ref: manifest references (an earlier row or a "
+                    f"prompts[{row.index}].{field_name}: manifest references (an earlier row or a "
                     "local file) work with `gflow run --config`, not `gflow image batch`."
                 )
                 raise ConfigurationError(msg)

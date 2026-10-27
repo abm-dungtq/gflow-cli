@@ -662,3 +662,179 @@ class TestGflowRunResumeNeverReusesTheWrongImage:
         assert result.exit_code == 0, result.output
         assert client.generate_image.call_count == 1
         assert client.generate_image.call_args.kwargs["req"].refs[0].name.endswith("asset-300")
+
+
+_VALID_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+
+
+class TestGflowRunRefsAndOutput:
+    """Multi-reference `refs: [...]`, explicit `output` paths, upload dedup, and `--resume`."""
+
+    def test_both_ref_and_refs_raises_configuration_error(self, tmp_path: Path) -> None:
+        ref_file = tmp_path / "a.png"
+        ref_file.write_bytes(_VALID_PNG)
+        cfg_path = _write_config(
+            tmp_path,
+            {"prompts": [{"text": "scene 1", "ref": "a.png", "refs": ["a.png"]}]},
+        )
+        with pytest.raises(ConfigurationError, match="cannot specify both 'ref' and 'refs'"):
+            BatchConfig.from_json_path(cfg_path)
+
+    def test_empty_refs_raises_configuration_error(self, tmp_path: Path) -> None:
+        cfg_path = _write_config(tmp_path, {"prompts": [{"text": "scene 1", "refs": []}]})
+        with pytest.raises(ConfigurationError, match="non-empty list"):
+            BatchConfig.from_json_path(cfg_path)
+
+    def test_refs_exceeding_model_cap_raises_configuration_error(self, tmp_path: Path) -> None:
+        files = []
+        for idx in range(11):
+            p = tmp_path / f"r{idx}.png"
+            p.write_bytes(_VALID_PNG)
+            files.append(p.name)
+        cfg_path = _write_config(
+            tmp_path,
+            {"prompts": [{"text": "too many refs", "model": "nano2", "refs": files}]},
+        )
+        with pytest.raises(ConfigurationError, match="supports at most 10"):
+            BatchConfig.from_json_path(cfg_path)
+
+    def test_both_output_and_output_filename_raises(self, tmp_path: Path) -> None:
+        cfg_path = _write_config(
+            tmp_path,
+            {
+                "prompts": [
+                    {
+                        "text": "scene 1",
+                        "output": "out/k1.png",
+                        "output_filename": "k1",
+                    }
+                ]
+            },
+        )
+        with pytest.raises(
+            ConfigurationError, match="cannot specify both 'output' and 'output_filename'"
+        ):
+            BatchConfig.from_json_path(cfg_path)
+
+    def test_multi_refs_deduplicates_uploads_and_writes_explicit_outputs_in_one_session(
+        self, tmp_path: Path
+    ) -> None:
+        from gflow_cli.api.image import ImageRef
+
+        nv = tmp_path / "nv-tieu-cuong.png"
+        dep = tmp_path / "dep-to-ong.png"
+        bg = tmp_path / "goc-bep.png"
+        for f in (nv, dep, bg):
+            f.write_bytes(_VALID_PNG)
+
+        out_k1 = tmp_path / "gen" / "vuong" / "k1.png"
+        out_k2 = tmp_path / "gen" / "vuong" / "k2.png"
+        out_k3 = tmp_path / "gen" / "vuong" / "k3.png"
+
+        cfg_path = _write_config(
+            tmp_path,
+            {
+                "prompts": [
+                    {
+                        "text": "shot 1",
+                        "aspect_ratio": "1:1",
+                        "refs": [str(nv), str(dep)],
+                        "output": str(out_k1),
+                    },
+                    {
+                        "text": "shot 2",
+                        "aspect_ratio": "1:1",
+                        "refs": [str(nv), str(bg)],
+                        "output": str(out_k2),
+                    },
+                    {
+                        "text": "shot 3",
+                        "aspect_ratio": "1:1",
+                        "refs": [str(nv), str(dep), str(bg)],
+                        "output": str(out_k3),
+                    },
+                ]
+            },
+        )
+
+        fake_client = _patched_client_factory()
+
+        async def _upload_ref(_project_id: str, path: Path) -> ImageRef:
+            return ImageRef(
+                name=f"uploaded-{path.stem}",
+                display_name=path.name,
+                in_project=True,
+            )
+
+        fake_client.upload_reference = AsyncMock(side_effect=_upload_ref)
+
+        with (
+            patch("gflow_cli.cli_run.FlowApiClient", return_value=fake_client),
+            patch("gflow_cli.cli_run._resolve_profile", return_value="meo-muop"),
+            patch("gflow_cli.cli_run._make_provider_dir", return_value=tmp_path / "prof"),
+        ):
+            result = CliRunner().invoke(
+                cli_main,
+                ["run", "--config", str(cfg_path)],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        # Only ONE browser session opened for all 3 prompts.
+        assert fake_client.__aenter__.call_count == 1
+        assert fake_client.__aexit__.call_count == 1
+        # 3 distinct files uploaded once each despite being referenced 7 times total.
+        assert fake_client.upload_reference.call_count == 3
+        # Each row received the exact list of ImageRefs in order.
+        reqs = [c.kwargs["req"] for c in fake_client.generate_image.call_args_list]
+        assert [r.name for r in reqs[0].refs] == [
+            "uploaded-nv-tieu-cuong",
+            "uploaded-dep-to-ong",
+        ]
+        assert [r.name for r in reqs[1].refs] == [
+            "uploaded-nv-tieu-cuong",
+            "uploaded-goc-bep",
+        ]
+        assert [r.name for r in reqs[2].refs] == [
+            "uploaded-nv-tieu-cuong",
+            "uploaded-dep-to-ong",
+            "uploaded-goc-bep",
+        ]
+        # Explicit output paths were written directly.
+        assert out_k1.is_file()
+        assert out_k2.is_file()
+        assert out_k3.is_file()
+
+    def test_resume_skips_rows_with_valid_explicit_output_file(self, tmp_path: Path) -> None:
+        out_k1 = tmp_path / "gen" / "k1.png"
+        out_k2 = tmp_path / "gen" / "k2.png"
+        out_k1.parent.mkdir(parents=True, exist_ok=True)
+        # k1 already exists as a valid image; k2 does not exist yet.
+        out_k1.write_bytes(_VALID_PNG)
+
+        cfg_path = _write_config(
+            tmp_path,
+            {
+                "prompts": [
+                    {"text": "first frame", "output": str(out_k1)},
+                    {"text": "second frame", "output": str(out_k2)},
+                ]
+            },
+        )
+        fake_client = _patched_client_factory()
+        with (
+            patch("gflow_cli.cli_run.FlowApiClient", return_value=fake_client),
+            patch("gflow_cli.cli_run._resolve_profile", return_value="meo-muop"),
+            patch("gflow_cli.cli_run._make_provider_dir", return_value=tmp_path / "prof"),
+        ):
+            result = CliRunner().invoke(
+                cli_main,
+                ["run", "--config", str(cfg_path), "--resume"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert fake_client.generate_image.call_count == 1
+        assert fake_client.generate_image.call_args.kwargs["req"].prompt == "second frame"
+        assert "RESUMED" in result.output
+        assert out_k2.is_file()

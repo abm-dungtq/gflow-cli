@@ -10,7 +10,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 from rich.console import Console
@@ -22,7 +22,7 @@ from gflow_cli._cli_helpers import (
 )
 from gflow_cli.api.client import FlowApiClient
 from gflow_cli.api.dto import BatchSubmissionResult, ProjectInfo
-from gflow_cli.api.image import Aspect, GenerateImageRequest, ImageRef, Model
+from gflow_cli.api.image import Aspect, GenerateImageRequest, ImageRef, Model, reference_cap_for
 from gflow_cli.api.transports.ui_automation import UiAutomationTransport
 from gflow_cli.config import get_settings, parse_jitter_range
 from gflow_cli.data.models import OperationKind
@@ -151,30 +151,53 @@ class BatchPromptItem:
     original_prompt: str | None = None
     tool: AppliedTool | None = None
     ref: str | None = None
+    refs: tuple[str, ...] = ()
+    output: str | None = None
     reference_entity: str | None = None
+
+    @property
+    def all_refs(self) -> tuple[str, ...]:
+        """All reference entries for this row (``refs`` or single ``ref``)."""
+        if self.refs:
+            return self.refs
+        if self.ref is not None:
+            return (self.ref,)
+        return ()
 
 
 _BATCH_REF = re.compile(r"batch:(0|[1-9][0-9]*)", re.ASCII)
 _MEDIA_ID = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
 
 
-def batch_parent(item: BatchPromptItem) -> int | None:
-    """The row index ``item.ref`` names (``"batch:N"``), or None without a reference.
+def batch_parents(item: BatchPromptItem) -> tuple[int, ...]:
+    """All row indices ``item.ref`` / ``item.refs`` name (``"batch:N"``), in order.
 
     Raises ConfigurationError for anything but the exact ``batch:<index>`` form: ``int()``
     alone would accept ``"batch: 1"``, ``"batch:01"``, ``"batch:1_0"`` (10) and non-ASCII
     digits (#913).
     """
-    if item.ref is None or not item.ref.startswith("batch:"):
-        return None  # no reference, or a local file
-    match = _BATCH_REF.fullmatch(item.ref)
-    if match is None:
-        msg = (
-            f"prompts[{item.index}].ref {item.ref!r} is not a batch reference: "
-            'use "batch:<row index>", e.g. "batch:0".'
-        )
-        raise ConfigurationError(msg)
-    return int(match.group(1))
+    field_name = "refs" if item.refs else "ref"
+    result: list[int] = []
+    for ref_spec in item.all_refs:
+        if not ref_spec.startswith("batch:"):
+            continue
+        match = _BATCH_REF.fullmatch(ref_spec)
+        if match is None:
+            msg = (
+                f"prompts[{item.index}].{field_name} {ref_spec!r} is not a batch reference: "
+                'use "batch:<row index>", e.g. "batch:0".'
+            )
+            raise ConfigurationError(msg)
+        p = int(match.group(1))
+        if p not in result:
+            result.append(p)
+    return tuple(result)
+
+
+def batch_parent(item: BatchPromptItem) -> int | None:
+    """The first row index ``item.ref`` / ``item.refs`` names (``"batch:N"``), or None."""
+    parents = batch_parents(item)
+    return parents[0] if parents else None
 
 
 def order_batch_rows(rows: list[BatchPromptItem]) -> list[BatchPromptItem]:
@@ -185,31 +208,37 @@ def order_batch_rows(rows: list[BatchPromptItem]) -> list[BatchPromptItem]:
     A referenced row must make exactly one image: ``batch:N`` names one image.
     """
     by_index = {row.index: row for row in rows}
-    parents: dict[int, int] = {}
+    parents: dict[int, tuple[int, ...]] = {}
     for row in rows:
-        parent = batch_parent(row)
-        if parent is None:
+        row_parents = batch_parents(row)
+        if not row_parents:
             continue
-        if parent == row.index:
-            msg = f"prompts[{row.index}].ref {row.ref!r} references itself."
-            raise ConfigurationError(msg)
-        if parent not in by_index:
-            msg = f"prompts[{row.index}].ref {row.ref!r} names a row that does not exist."
-            raise ConfigurationError(msg)
-        if by_index[parent].count != 1:
-            msg = (
-                f"prompts[{parent}] makes {by_index[parent].count} images, so "
-                f"prompts[{row.index}].ref {row.ref!r} is ambiguous: a referenced row "
-                'needs "count": 1.'
-            )
-            raise ConfigurationError(msg)
-        parents[row.index] = parent
+        field_name = "refs" if row.refs else "ref"
+        for parent in row_parents:
+            ref_label = row.ref if row.ref is not None else f"batch:{parent}"
+            if parent == row.index:
+                msg = f"prompts[{row.index}].{field_name} {ref_label!r} references itself."
+                raise ConfigurationError(msg)
+            if parent not in by_index:
+                msg = (
+                    f"prompts[{row.index}].{field_name} {ref_label!r} "
+                    "names a row that does not exist."
+                )
+                raise ConfigurationError(msg)
+            if by_index[parent].count != 1:
+                msg = (
+                    f"prompts[{parent}] makes {by_index[parent].count} images, so "
+                    f"prompts[{row.index}].{field_name} {ref_label!r} is ambiguous: "
+                    'a referenced row needs "count": 1.'
+                )
+                raise ConfigurationError(msg)
+        parents[row.index] = row_parents
 
     ordered: list[BatchPromptItem] = []
     done: set[int] = set()
     pending = list(rows)
     while pending:
-        ready = [r for r in pending if parents.get(r.index) in (None, *done)]
+        ready = [r for r in pending if all(p in done for p in parents.get(r.index, ()))]
         if not ready:
             cycle = sorted(r.index for r in pending)
             msg = f"prompts{cycle} reference each other in a cycle; no row can run first."
@@ -344,8 +373,55 @@ def read_prompt_file(path: Path) -> tuple[ParsedPromptLine, ...]:
 
 
 _ALLOWED_PROMPT_KEYS: frozenset[str] = frozenset(
-    {"text", "aspect_ratio", "model", "count", "output_filename", "ref", "reference_entity"},
+    {
+        "text",
+        "aspect_ratio",
+        "model",
+        "count",
+        "output_filename",
+        "output",
+        "ref",
+        "refs",
+        "reference_entity",
+    },
 )
+
+
+def _parse_refs_field(
+    refs_raw: object,
+    *,
+    idx: int,
+    model: str,
+) -> tuple[str, ...]:
+    """Validate ``prompts[idx].refs`` and return a tuple of non-empty strings."""
+    if refs_raw is None:
+        return ()
+    if not isinstance(refs_raw, list) or not refs_raw:
+        msg = f"prompts[{idx}].refs must be a non-empty list of strings."
+        raise ConfigurationError(msg)
+    refs_list = cast("list[Any]", refs_raw)
+    cap = reference_cap_for(Model.from_cli(model))
+    if len(refs_list) > cap:
+        msg = (
+            f"prompts[{idx}].refs has {len(refs_list)} references, "
+            f"but model {model!r} supports at most {cap}."
+        )
+        raise ConfigurationError(msg)
+    parsed: list[str] = []
+    for r_idx, item_val in enumerate(refs_list):
+        if not isinstance(item_val, str) or not item_val.strip():
+            msg = f"prompts[{idx}].refs[{r_idx}] must be a non-empty string."
+            raise ConfigurationError(msg)
+        if _MEDIA_ID.fullmatch(item_val):
+            msg = (
+                f"prompts[{idx}].refs[{r_idx}] is not supported yet: manifest references were "
+                "never applied (#913). A row's `refs` names an earlier row "
+                '("batch:N") or a local image file, not a media id; for that use '
+                "`gflow image i2i --ref <media id>`."
+            )
+            raise ConfigurationError(msg)
+        parsed.append(item_val)
+    return tuple(parsed)
 
 
 def parse_batch_item_dict(p: dict[str, Any], idx: int) -> BatchPromptItem:
@@ -404,10 +480,25 @@ def parse_batch_item_dict(p: dict[str, Any], idx: int) -> BatchPromptItem:
     ):
         msg = f"prompts[{idx}].output_filename must be a non-empty string."
         raise ConfigurationError(msg)
-    ref = p.get("ref")
-    if ref is not None and not isinstance(ref, str):
-        msg = f"prompts[{idx}].ref must be a string."
+    output = p.get("output")
+    if output is not None and (not isinstance(output, str) or not output.strip()):
+        msg = f"prompts[{idx}].output must be a non-empty string."
         raise ConfigurationError(msg)
+    if output is not None and output_filename is not None:
+        msg = f"prompts[{idx}] cannot specify both 'output' and 'output_filename'."
+        raise ConfigurationError(msg)
+    ref = p.get("ref")
+    if ref is not None and (not isinstance(ref, str) or not ref.strip()):
+        msg = f"prompts[{idx}].ref must be a non-empty string."
+        raise ConfigurationError(msg)
+    refs_raw = p.get("refs")
+    if ref is not None and refs_raw is not None:
+        msg = (
+            f"prompts[{idx}] cannot specify both 'ref' and 'refs'; "
+            "use 'ref' for a single reference or 'refs' for a list."
+        )
+        raise ConfigurationError(msg)
+    refs = _parse_refs_field(refs_raw, idx=idx, model=model)
     reference_entity = p.get("reference_entity")
     if reference_entity is not None and not isinstance(reference_entity, str):
         msg = f"prompts[{idx}].reference_entity must be a string."
@@ -433,8 +524,10 @@ def parse_batch_item_dict(p: dict[str, Any], idx: int) -> BatchPromptItem:
         model=model,
         count=count,
         output_filename=output_filename,
+        output=output,
         index=idx,
         ref=ref,
+        refs=refs,
         reference_entity=reference_entity,
     )
 
@@ -526,6 +619,18 @@ def prompt_items_from_texts(
     return tuple(items)
 
 
+def target_for_batch_item_image(item: BatchPromptItem, output_dir: Path, img_idx: int) -> Path:
+    """Resolve the destination path for image ``img_idx`` of ``item``."""
+    if item.output is not None:
+        out_path = Path(item.output).expanduser()
+        suffix = out_path.suffix or ".png"
+        if item.count == 1:
+            return out_path if out_path.suffix else out_path.with_suffix(suffix)
+        return out_path.parent / f"{out_path.stem}_{img_idx + 1}{suffix}"
+    stem = item.output_filename or f"prompt_{item.index}"
+    return output_dir / f"{stem}_{img_idx}.png"
+
+
 async def run_one_image_prompt(
     *,
     client: Any,
@@ -539,6 +644,7 @@ async def run_one_image_prompt(
     command: str = "image t2i",
     project_title: str | None = None,
     reference: ImageRef | None = None,
+    references: tuple[ImageRef, ...] = (),
     project_created: bool = True,
 ) -> BatchOutcome:
     """Generate images for one prompt and download them.
@@ -550,18 +656,20 @@ async def run_one_image_prompt(
     prompt also persists a FAILED operation row (#341) before the outcome is
     returned, and a successful one is recorded with its images (#913).
     """
+    effective_refs: tuple[ImageRef, ...] = (
+        references if references else ((reference,) if reference is not None else ())
+    )
     req = GenerateImageRequest(
         prompt=item.text,
         aspect=Aspect.from_cli(item.aspect_ratio),
         model=Model.from_cli(item.model),
         original_prompt=item.original_prompt,
         tool=item.tool,
-        # An image already in this run's project (`batch:N`, or a local file uploaded
+        # Images already in this run's project (`batch:N`, or local files uploaded
         # once), referenced in place. Never a `local_path`: that fallback would
         # re-upload a duplicate (#913).
-        refs=(reference,) if reference is not None else (),
+        refs=effective_refs,
     )
-    stem = item.output_filename or f"prompt_{idx}"
     mode = OperationKind.I2I if req.refs else OperationKind.T2I
 
     def record_failure(exc: BaseException, flow_media_ids: list[str] | None = None) -> None:
@@ -608,7 +716,7 @@ async def run_one_image_prompt(
     saved: list[Path] = []
     try:
         for img_idx, img in enumerate(images):
-            target = output_dir / f"{stem}_{img_idx}.png"
+            target = target_for_batch_item_image(item, output_dir, img_idx)
             saved.append(await client.download_image(img, target))
     except BaseException as exc:
         # The images exist in Flow; only the local copy failed. Report the row as failed
@@ -762,55 +870,61 @@ async def run_image_batch(
         if resumed and (done := resumed.get(item.index)) is not None:
             results[item.index] = done
             return done
-        parent = batch_parent(item)
-        reference: ImageRef | None = None
-        if parent is not None:
-            parent_outcome = results.get(parent)
-            if parent_outcome is None or not parent_outcome.images:
-                skipped = parent_outcome is not None and parent_outcome.status == "skipped"
-                outcome = BatchOutcome(
-                    index=item.index,
-                    prompt=item,
-                    status="skipped",
-                    error=f"parent row {parent} {'was skipped' if skipped else 'failed'}",
-                )
-                results[item.index] = outcome
-                return outcome
-            image = parent_outcome.images[0]
-            reference = ImageRef(
-                name=image.media_name, display_name=image.display_name or "", in_project=True
-            )
-        elif item.ref is not None:
-            # A local file, validated when the config was loaded: uploaded into this
-            # run's project once, then referenced in place by every row that names it.
-            cached = uploads.get(item.ref)
-            if cached is None:
-                try:
-                    if item.ref in lost_uploads:
-                        raise lost_uploads[item.ref]
-                    cached = await client.upload_reference(project_id, Path(item.ref))
-                except Exception as exc:  # noqa: BLE001 - one row's upload must not end the run
-                    # Like a generation failure: the row fails with the reason and the run
-                    # goes on. Not cached, so a later row naming the file retries it --
-                    # unless the outcome is unknown: then a retry could duplicate the asset.
-                    if isinstance(exc, RpcResponseUnavailableError):
-                        lost_uploads[item.ref] = exc
-                    logger.warning(
-                        "batch.reference_upload_failed",
-                        index=item.index,
-                        error_class=type(exc).__name__,
-                    )
+        row_refs: list[ImageRef] = []
+        for ref_spec in item.all_refs:
+            if ref_spec.startswith("batch:"):
+                parent = int(ref_spec.split(":", 1)[1])
+                parent_outcome = results.get(parent)
+                if parent_outcome is None or not parent_outcome.images:
+                    skipped = parent_outcome is not None and parent_outcome.status == "skipped"
                     outcome = BatchOutcome(
                         index=item.index,
                         prompt=item,
-                        status="fail",
-                        error=f"reference upload failed: {type(exc).__name__}: {exc}",
-                        exit_code=resolve_exit_code(exc) if isinstance(exc, GFlowError) else 1,
+                        status="skipped",
+                        error=f"parent row {parent} {'was skipped' if skipped else 'failed'}",
                     )
                     results[item.index] = outcome
                     return outcome
-                uploads[item.ref] = cached
-            reference = cached
+                image = parent_outcome.images[0]
+                row_refs.append(
+                    ImageRef(
+                        name=image.media_name,
+                        display_name=image.display_name or "",
+                        in_project=True,
+                    )
+                )
+            else:
+                # A local file, validated when the config was loaded: uploaded into this
+                # run's project once, then referenced in place by every row that names it.
+                cached = uploads.get(ref_spec)
+                if cached is None:
+                    try:
+                        if ref_spec in lost_uploads:
+                            raise lost_uploads[ref_spec]
+                        cached = await client.upload_reference(project_id, Path(ref_spec))
+                    except Exception as exc:  # noqa: BLE001 - one row's upload must not end the run
+                        # Like a generation failure: the row fails with the reason and the run
+                        # goes on. Not cached, so a later row naming the file retries it --
+                        # unless the outcome is unknown: then a retry could duplicate the asset.
+                        if isinstance(exc, RpcResponseUnavailableError):
+                            lost_uploads[ref_spec] = exc
+                        logger.warning(
+                            "batch.reference_upload_failed",
+                            index=item.index,
+                            error_class=type(exc).__name__,
+                        )
+                        outcome = BatchOutcome(
+                            index=item.index,
+                            prompt=item,
+                            status="fail",
+                            error=f"reference upload failed: {type(exc).__name__}: {exc}",
+                            exit_code=resolve_exit_code(exc) if isinstance(exc, GFlowError) else 1,
+                        )
+                        results[item.index] = outcome
+                        return outcome
+                    uploads[ref_spec] = cached
+                row_refs.append(cached)
+        references_tuple = tuple(row_refs)
         outcome = await run_one_image_prompt(
             client=client,
             project_id=project_id,
@@ -822,7 +936,8 @@ async def run_image_batch(
             profile_dir=profile_dir,
             command=_command,
             project_title=project_title,
-            reference=reference,
+            reference=references_tuple[0] if len(references_tuple) == 1 else None,
+            references=references_tuple,
             project_created=project_created,
         )
         results[item.index] = outcome
@@ -1150,9 +1265,8 @@ async def _download_item_images(
     saved: list[Path],
 ) -> list[Path]:
     """Download all images for one ok BatchSubmissionResult into ``saved``; return it."""
-    stem = item.output_filename or f"prompt_{item.index}"
     for img_idx, img in enumerate(result.images):
-        target = output_dir / f"{stem}_{img_idx}.png"
+        target = target_for_batch_item_image(item, output_dir, img_idx)
         path = await client.download_image(img, target)
         saved.append(path)
         try:
