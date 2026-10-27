@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A video whose submit reply Chrome lost now finishes with its clip on flow.google.com**
+  ([#1112](https://github.com/ffroliva/gflow-cli/issues/1112)). About 1 in 7 r2v submits
+  lost the reply body while Flow made and billed the clip, and gflow ended with exit 9. A
+  run that uploaded a file (`--ref`, `--initial-frame`, `--end-frame`) now picks its clip
+  out of Flow's status replies by that upload's id, or out of the project listing in a
+  second tab, and downloads it, without submitting again. Text-to-video and character-only
+  r2v runs upload nothing unique, so they still exit 9 (`retryable: false`).
+
 - **Reference-to-video with a character now runs on flow.google.com**
   ([#723](https://github.com/ffroliva/gflow-cli/issues/723)). Local-file `video r2v` with
   `--reference-entity` paired with `--reference-entity-name` is served on the migrated host:
