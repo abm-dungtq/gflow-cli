@@ -418,6 +418,20 @@ Measurement script: `scripts/dev/spike_offscreen_window.py`.
 
 **Malformed values** (`100`, `1,2,3`, `a,b`) fail at startup with a validation error.
 
+### `GFLOW_CLI_WINDOW_MODE`
+
+**What:** Controls how the headed generation browser window is launched.
+**Values:** `offscreen` | `background` | `normal`
+**Default:** `offscreen` — uses `GFLOW_CLI_BROWSER_WINDOW_POSITION` without changing the browser binary.
+
+| Value | Behaviour |
+|---|---|
+| `offscreen` | Default. Passes `--window-position=<GFLOW_CLI_BROWSER_WINDOW_POSITION>`. |
+| `background` | On macOS (`darwin`), launches a local `LSBackgroundOnly` clone of Google Chrome (`<GFLOW_CLI_HOME>/macos-bg/Google Chrome.app`, refreshed automatically when Chrome updates) with background-throttling disabled so no Dock icon appears and keyboard focus is never stolen. On other platforms, logs a warning and falls back to `offscreen`. |
+| `normal` | Omits `--window-position` so Chrome opens visibly at its default on-screen position. |
+
+`gflow auth login` is unaffected and always opens a visible window.
+
 ### `GFLOW_CLI_BROWSER_PROXY`
 
 **What:** A proxy for every browser gflow launches: generation (CLI and MCP),

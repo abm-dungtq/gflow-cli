@@ -309,6 +309,14 @@ class BrowserEngine(StrEnum):
     PATCHRIGHT = "patchright"
 
 
+class WindowMode(StrEnum):
+    """Placement and activation mode for the headed generation browser window."""
+
+    OFFSCREEN = "offscreen"
+    BACKGROUND = "background"
+    NORMAL = "normal"
+
+
 class Settings(BaseSettings):
     """All gflow-cli configuration. Build via `Settings()` (or `get_settings()`)."""
 
@@ -552,6 +560,25 @@ class Settings(BaseSettings):
             "GFLOW_CLI_BROWSER_WINDOW_POSITION."
         ),
     )
+    window_mode: WindowMode = Field(
+        default=WindowMode.OFFSCREEN,
+        description=(
+            "Window mode for the headed generation browser: 'offscreen' (default, "
+            "places the window at GFLOW_CLI_BROWSER_WINDOW_POSITION), 'background' "
+            "(macOS: launches a background-only Chrome app clone with no Dock icon "
+            "and no focus steal; falls back to 'offscreen' on other platforms), or "
+            "'normal' (Chrome's default on-screen window placement). Login always "
+            "opens a normal visible window. Override via GFLOW_CLI_WINDOW_MODE."
+        ),
+    )
+
+    @field_validator("window_mode", mode="before")
+    @classmethod
+    def _normalize_window_mode(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
     browser_proxy: str | None = Field(
         default=None,
         description=(

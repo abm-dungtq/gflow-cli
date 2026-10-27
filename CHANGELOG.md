@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`GFLOW_CLI_WINDOW_MODE` (`offscreen` | `background` | `normal`) for macOS background generation runs**.
+  `offscreen` remains the default. On macOS, `background` launches an APFS-cloned
+  `LSBackgroundOnly` Google Chrome bundle under `<GFLOW_CLI_HOME>/macos-bg/Google Chrome.app`
+  (auto-refreshed when Chrome's `CFBundleVersion` changes) with background timer/renderer
+  throttling disabled, eliminating the Dock icon and focus stealing during generation while
+  keeping headed Chrome for reCAPTCHA Enterprise. `normal` opens Chrome at its default
+  on-screen placement; `gflow auth login` always stays visible.
+
 ### Fixed
 
 - **MCP `wait=false` generations now run**

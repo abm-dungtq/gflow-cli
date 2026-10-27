@@ -1088,7 +1088,7 @@ class UiAutomationTransport(VideoGenerationMixin):
                 browser_proxy_kwargs,
                 channel_for_profile,
                 ensure_profile_engine_compatible,
-                window_position_args,
+                generation_window_config,
             )
             from gflow_cli.config import get_settings
 
@@ -1098,23 +1098,37 @@ class UiAutomationTransport(VideoGenerationMixin):
             # instead of blocking the event loop.
             self._lease = await ProfileLease(profile_dir).aacquire()
             locale_env = os.getenv("GFLOW_CLI_LOCALE", "en-US")
+            settings = get_settings()
             channel = channel_for_profile(profile_dir)
+            window_args, executable_path = generation_window_config(
+                settings.window_mode,
+                settings.browser_window_position,
+                home=settings.home,
+            )
             # #477: refuse a bundled-Chromium open of a profile last written by
             # a newer Chromium — downgrade cleanup can shred the session store.
-            ensure_profile_engine_compatible(profile_dir, channel)
-            ctx = await pw.chromium.launch_persistent_context(
-                str(profile_dir),
-                headless=False,
-                viewport=cast("ViewportSize", _VIEWPORT),
-                locale=locale_env,
-                channel=channel,
-                args=[
+            ensure_profile_engine_compatible(
+                profile_dir,
+                channel or ("chrome" if executable_path is not None else None),
+            )
+            launch_kwargs: dict[str, Any] = {
+                "headless": False,
+                "viewport": cast("ViewportSize", _VIEWPORT),
+                "locale": locale_env,
+                "channel": None if executable_path is not None else channel,
+                "args": [
                     "--disable-blink-features=AutomationControlled",
                     "--password-store=basic",
                     "--disable-dev-shm-usage",
-                    *window_position_args(get_settings().browser_window_position),
+                    *window_args,
                 ],
-                **browser_proxy_kwargs(get_settings().browser_proxy),
+                **browser_proxy_kwargs(settings.browser_proxy),
+            }
+            if executable_path is not None:
+                launch_kwargs["executable_path"] = str(executable_path)
+            ctx = await pw.chromium.launch_persistent_context(
+                str(profile_dir),
+                **launch_kwargs,
             )
             # Hide the automation flag so reCAPTCHA Enterprise doesn't score
             # the session as a bot — navigator.webdriver=true causes low-score

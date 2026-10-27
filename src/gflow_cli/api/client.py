@@ -88,8 +88,8 @@ from gflow_cli.auth.internal_chromium import GOOGLE_REJECTED_BROWSER_ROUTE
 from gflow_cli.browser_manager import (
     browser_proxy_kwargs,
     channel_for_profile,
+    generation_window_config,
     profile_in_use_error,
-    window_position_args,
 )
 from gflow_cli.config import BrowserEngine, Settings
 from gflow_cli.diagnostics import IncidentRecorder, run_retention, validated_incidents_root
@@ -517,13 +517,20 @@ class FlowApiClient:
         core path. The returned dict is identical to the previous inline call,
         plus an optional ``record_har_path`` when ``GFLOW_CLI_HAR_PATH`` is set.
         """
+        window_args, executable_path = generation_window_config(
+            self.settings.window_mode,
+            self.settings.browser_window_position,
+            home=self.settings.home,
+        )
         kwargs: JsonObject = {
             "user_data_dir": str(self.profile_dir),
             "headless": self.headless,
             "viewport": {"width": 1280, "height": 720},
             "locale": "en-US",
             "extra_http_headers": {"Accept-Language": "en-US,en;q=0.9"},
-            "channel": channel_for_profile(self.profile_dir),
+            "channel": None
+            if executable_path is not None
+            else channel_for_profile(self.profile_dir),
             "ignore_default_args": [
                 "--enable-automation",
                 "--no-sandbox",
@@ -545,10 +552,12 @@ class FlowApiClient:
                 "--password-store=basic",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-dev-shm-usage",
-                *window_position_args(self.settings.browser_window_position),
+                *window_args,
             ],
             **browser_proxy_kwargs(self.settings.browser_proxy),
         }
+        if executable_path is not None:
+            kwargs["executable_path"] = str(executable_path)
         if self.settings.har_path is not None:
             self.settings.har_path.parent.mkdir(parents=True, exist_ok=True)
             kwargs["record_har_path"] = str(self.settings.har_path)
@@ -590,8 +599,9 @@ class FlowApiClient:
         from gflow_cli.paths import get_cookies_path
 
         channel = kwargs.get("channel")
+        effective_channel = channel or ("chrome" if kwargs.get("executable_path") else None)
         wants_chrome = chrome_strategy_requested(self.profile_dir)
-        executable = resolved_chrome_binary()
+        executable = kwargs.get("executable_path") or resolved_chrome_binary()
         # Resolve the cookie file the way auth/verification does (Chrome 130+
         # Default/Network/Cookies, then legacy Default/Cookies, then bundled
         # Cookies). Logging the actual path discriminates the H2 cookie-location
@@ -622,7 +632,7 @@ class FlowApiClient:
             # #1036: scheme://host:port (credentials are refused by Settings).
             proxy=proxy_spec.get("server"),
         )
-        if wants_chrome and channel is None:
+        if wants_chrome and effective_channel is None:
             msg = (
                 "Profile requests the 'chrome' browser strategy "
                 "(.gflow_browser_strategy=chrome) but Playwright's 'chrome' channel is "
@@ -640,7 +650,7 @@ class FlowApiClient:
             logger.warning("client.chrome_strategy_downgraded", detail=msg)
         # #477: refuse a bundled-Chromium open of a profile last written by a
         # newer Chromium — downgrade cleanup can shred the session store.
-        ensure_profile_engine_compatible(self.profile_dir, channel)
+        ensure_profile_engine_compatible(self.profile_dir, effective_channel)
 
     async def _preread_flow_session_cookies(self) -> None:
         """#222: read the profile's Flow cookies BEFORE the headed generation

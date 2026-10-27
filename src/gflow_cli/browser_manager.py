@@ -58,8 +58,13 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import shutil
+import subprocess
 import sys
+import time
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +75,9 @@ from gflow_cli.errors import (
     ProfileEngineDowngradeError,
     ProfileLockedError,
 )
+
+if sys.platform != "win32":
+    import fcntl
 
 log = structlog.get_logger(__name__)
 
@@ -219,6 +227,195 @@ def window_position_args(position: str) -> list[str]:
     ``UiAutomationTransport``) so they cannot drift. Login launches stay visible.
     """
     return [f"--window-position={position}"] if position else []
+
+
+ANTI_THROTTLING_ARGS: tuple[str, ...] = (
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+)
+
+_MACOS_CHROME_APP = Path("/Applications/Google Chrome.app")
+_MACOS_BG_LOCK_TIMEOUT_SECONDS = 120.0
+_MACOS_BG_LOCK_POLL_SECONDS = 0.2
+
+
+def _remove_macos_app_bundle(app_path: Path) -> None:
+    """Rename away the ``.app`` suffix before removal to avoid macOS AppManagement TCC."""
+    if not app_path.exists():
+        return
+    tmp_del = app_path.with_name(app_path.name.replace(".app", "") + "_del")
+    if tmp_del.exists():
+        shutil.rmtree(tmp_del, ignore_errors=True)
+    try:
+        app_path.rename(tmp_del)
+        shutil.rmtree(tmp_del, ignore_errors=True)
+    except OSError:
+        shutil.rmtree(app_path, ignore_errors=True)
+
+
+@contextmanager
+def _macos_bg_lock(
+    lock_path: Path,
+    timeout: float | None = None,
+) -> Generator[None, None, None]:
+    """Acquire an exclusive ``fcntl.flock`` on ``<home>/macos-bg/.lock``."""
+    wait_timeout = _MACOS_BG_LOCK_TIMEOUT_SECONDS if timeout is None else timeout
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    acquired = False
+    try:
+        if sys.platform != "win32":
+            deadline = time.monotonic() + wait_timeout
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except OSError as exc:
+                    if time.monotonic() >= deadline:
+                        msg = (
+                            f"Timed out after {wait_timeout:g}s waiting for macOS background "
+                            f"Chrome build lock at {lock_path}."
+                        )
+                        raise ConfigurationError(msg) from exc
+                    time.sleep(_MACOS_BG_LOCK_POLL_SECONDS)
+        yield
+    finally:
+        try:
+            if acquired and sys.platform != "win32":
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _is_macos_bg_chrome_current(
+    target_bin: Path,
+    target_plist: Path,
+    src_version: str,
+) -> bool:
+    if not (target_bin.is_file() and target_plist.is_file()):
+        return False
+    try:
+        with target_plist.open("rb") as f:
+            dst_data = plistlib.load(f)
+        return (
+            str(dst_data.get("CFBundleVersion", "")) == src_version
+            and dst_data.get("LSBackgroundOnly") in (True, "1", 1)
+            and "LSUIElement" not in dst_data
+        )
+    except Exception:  # noqa: BLE001 — rebuild on any corrupt plist
+        return False
+
+
+def ensure_macos_background_chrome(
+    home: Path,
+    source_app: Path = _MACOS_CHROME_APP,
+) -> Path:
+    """Prepare or refresh ``<home>/macos-bg/Google Chrome.app`` for ``window_mode=background``.
+
+    Clones the installed Google Chrome bundle via ``cp -c -R`` (APFS clonefile, falling back
+    to ``cp -R`` across volumes), sets ``LSBackgroundOnly = True`` in ``Contents/Info.plist``
+    (omitting ``LSUIElement``, which Chromium's ``base/apple/foundation_util.mm`` uses to
+    identify nested helper bundles), strips extended attributes, and re-signs ad-hoc with
+    ``codesign --force --deep --sign -``. Rebuilds automatically when ``CFBundleVersion``
+    of the source Chrome changes, serialized across parallel lanes via ``<home>/macos-bg/.lock``.
+    """
+    source_plist = source_app / "Contents" / "Info.plist"
+    if not source_plist.is_file():
+        msg = (
+            f"Google Chrome not found at {source_app}; required for "
+            "GFLOW_CLI_WINDOW_MODE=background on macOS."
+        )
+        raise ConfigurationError(msg)
+
+    with source_plist.open("rb") as f:
+        src_data = plistlib.load(f)
+    src_version = str(src_data.get("CFBundleVersion", ""))
+
+    bg_dir = home / "macos-bg"
+    target_app = bg_dir / "Google Chrome.app"
+    target_bin = target_app / "Contents" / "MacOS" / "Google Chrome"
+    target_plist = target_app / "Contents" / "Info.plist"
+
+    with _macos_bg_lock(bg_dir / ".lock"):
+        if _is_macos_bg_chrome_current(target_bin, target_plist, src_version):
+            return target_bin
+
+        staging = bg_dir / "chrome_staging_build"
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        _remove_macos_app_bundle(target_app)
+
+        cp_res = subprocess.run(
+            ["cp", "-c", "-R", str(source_app), str(staging)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if cp_res.returncode != 0:
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+            subprocess.run(
+                ["cp", "-R", str(source_app), str(staging)],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+        staging_plist = staging / "Contents" / "Info.plist"
+        with staging_plist.open("rb") as f:
+            plist_data = plistlib.load(f)
+        plist_data.pop("LSUIElement", None)
+        plist_data["LSBackgroundOnly"] = True
+        with staging_plist.open("wb") as f:
+            plistlib.dump(plist_data, f)
+
+        subprocess.run(
+            ["xattr", "-cr", str(staging)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        subprocess.run(
+            ["codesign", "--force", "--deep", "--sign", "-", str(staging)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        staging.rename(target_app)
+        return target_bin
+
+
+def window_mode_args(window_mode: str, position: str) -> list[str]:
+    """Build Chrome window-placement and anti-throttling flags for ``window_mode``."""
+    mode = str(window_mode).lower()
+    if mode == "normal":
+        return []
+    if mode == "background":
+        if sys.platform != "darwin":
+            log.warning(
+                "browser_manager.window_mode_background_unsupported",
+                platform=sys.platform,
+                fallback="offscreen",
+            )
+            return window_position_args(position)
+        return [*window_position_args(position), *ANTI_THROTTLING_ARGS]
+    return window_position_args(position)
+
+
+def generation_window_config(
+    window_mode: str,
+    position: str,
+    *,
+    home: Path,
+) -> tuple[list[str], Path | None]:
+    """Return ``(window_args, executable_path)`` for a generation browser launch."""
+    mode = str(window_mode).lower()
+    args = window_mode_args(mode, position)
+    if mode == "background" and sys.platform == "darwin":
+        return args, ensure_macos_background_chrome(home)
+    return args, None
 
 
 #: Playwright's launch error when Chrome hands the profile to a running instance
