@@ -317,8 +317,7 @@ async def test_run_video_rejects_modes_not_yet_ported_with_exit_36() -> None:
 async def test_run_video_refuses_character_references_outside_r2v() -> None:
     """#716: the refusal was behind the R2V branch, so t2v carried an entity into a
     BILLED generation that never attached it. R2V is served since #723: it attaches the
-    entities and counts the chips before the click, and its null submit reply is
-    followed on the status poll.
+    entities by name and counts the chips before the click.
 
     T2V returned early from ``_unported_form`` before ``reference_entities`` was ever
     inspected, and nothing downstream attaches one — ``attach_start_frame`` is i2v-only,
