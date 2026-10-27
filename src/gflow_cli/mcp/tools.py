@@ -1201,11 +1201,12 @@ async def gflow_generate_video(  # NOSONAR
             account. On an account served flow.google.com (``GFLOW_CLI_FLOW_HOST``,
             read from the server/daemon environment, not per call) the ported
             modes are 't2v'; 'i2v' with a local ``initial_frame`` with or without
-            a local ``end_frame``; and 'r2v' with local ``reference_images``. A UUID
-            frame, an end frame by UUID/``@Name``, and r2v by ``ref_names`` or
-            ``reference_entities`` return the exit-36-equivalent envelope. On an
-            agent-only composer (#799) only 't2v' is ported; 'i2v' and 'r2v' return
-            that envelope too.
+            a local ``end_frame``; and 'r2v' with local ``reference_images``, plus
+            ``reference_entities`` paired with ``reference_entity_names`` (#723). A
+            UUID frame, an end frame by UUID/``@Name``, r2v by ``ref_names``, and
+            ``reference_entities`` on 't2v' or without a paired name return the
+            exit-36-equivalent envelope. On an agent-only composer
+            (#799) only 't2v' is ported; 'i2v' and 'r2v' return that envelope too.
         ui_mode: Required Flow UI arm (mirrors the CLI ``--ui-mode`` on
             ``video t2v``/``i2v``; applies to every mode of this tool,
             including 'r2v'). Labs video only has a classic driver:

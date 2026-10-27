@@ -735,11 +735,11 @@ Options:
 > `--initial-frame` runs there too — **including with a local `--end-frame`**
 > (start+end interpolation, #639; see [`gflow video i2v`](#gflow-video-i2v)) — as does
 > `r2v` from local `--ref` files (see [`gflow video r2v`](#gflow-video-r2v)). An end frame
-> or start frame given by UUID or `@Name`, and video character references (`@Name` or
-> `--reference-entity`), are not ported to the migrated composer yet. `image t2i` and local-file `image i2i` also run on a moved
+> or start frame given by UUID or `@Name`, and video character references outside `r2v`,
+> are not ported to the migrated composer yet; `r2v` takes a character with
+> `--reference-entity` paired with `--reference-entity-name` (#723). `image t2i` and local-file `image i2i` also run on a moved
 > account, and on images a character can be tagged with `@Name` or `--reference-entity`
-> (see [REFERENCE_STRATEGIES § flow.google.com](REFERENCE_STRATEGIES.md#on-flowgooglecom-images-only-723);
-> video is unchanged). An image `--ref <uuid>` is referenced in place, with no upload, when the
+> (see [REFERENCE_STRATEGIES § flow.google.com](REFERENCE_STRATEGIES.md#on-flowgooglecom-images-and-video-r2v-723)). An image `--ref <uuid>` is referenced in place, with no upload, when the
 > local catalog records that image in the same `--project` and keeps its Flow caption
 > ([#995](https://github.com/ffroliva/gflow-cli/issues/995)); any other UUID, and instruction/Imagen-4
 > image forms, still exit 36. `flow.google.com` forces the migrated composer,
@@ -862,8 +862,10 @@ gflow video r2v "blend these worlds" --ref a.png --ref b.png --ref c.png --model
 > whose references have not all attached is refused **before** submit (exit 32), and the
 > app's own submit body must carry every uploaded media id with a reference-to-video model
 > key (exit 7 otherwise) — the failure being a full-price clip with none of your references
-> on it. References given by `@Name` or `--reference-entity` (character entities) exit 36
-> there; an unmoved account keeps the labs driver for those.
+> on it. A character entity is attached there through the composer's `@` picker when
+> `--reference-entity` is paired with `--reference-entity-name` (#723), and its chip is
+> verified before submit; an id without a name exits 36, and a video `@Name` exits 29
+> because the character catalog cannot be read on that host.
 >
 > **`--duration` is refused on this path (exit 11).** The host offers reference-to-video
 > only at its base 8s tier. At 4s or 6s it does not refuse — it drops the references,

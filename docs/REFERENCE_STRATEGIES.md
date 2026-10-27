@@ -79,11 +79,13 @@ Notes:
   fails fast with a clear exit-11 message naming the Phase-3 limitation — no silent drop, no wasted
   credit.
 
-## On flow.google.com (images only, #723)
+## On flow.google.com (images and video r2v, #723)
 
 On an account Flow serves from `flow.google.com`, `image t2i` and `image i2i` take a character
-mention (`@Name` or `--reference-entity`) through the composer's own `@` picker. **Video is
-unchanged:** video characters are still refused there: `--reference-entity` exits 36, and a video `@Name` exits 29 because the character catalog cannot be read on that host.
+mention (`@Name` or `--reference-entity`) through the composer's own `@` picker. **Video:**
+local-file `video r2v` takes a character there with `--reference-entity` paired with
+`--reference-entity-name` (#723). Other video modes still refuse characters (exit 36), and a
+video `@Name` exits 29 because the character catalog cannot be read on that host.
 
 - **No catalog needed.** On that host `gflow character list` cannot read the catalog (its labs route
   answers an error: 401 or 404 measured, the labs route is retired). When the character source fails, an image mention that matches no media asset

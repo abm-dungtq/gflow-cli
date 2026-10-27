@@ -581,7 +581,7 @@ def _unported_form(request: GenerateVideoRequest) -> str | None:
     2026-09-15 (scripts/dev/spike_migrated_end_frame.py): two empty chips, Start
     and End by text, and clicking the End chip opens the library picker."""
     # Character entities are a different attach surface (a chip with an entity_id, in a
-    # different wire slot) and unported. This check is MODE-INDEPENDENT and must stay
+    # different wire slot), ported for r2v only. This check is MODE-INDEPENDENT and must stay
     # ahead of every early return (#716): it used to live inside the R2V branch, so a
     # t2v request returned `None` here without its entities ever being inspected, and
     # nothing downstream attaches one — `attach_start_frame` is i2v-only,
@@ -593,43 +593,18 @@ def _unported_form(request: GenerateVideoRequest) -> str | None:
     # `prefer_migrated`, and an account Flow has already moved is routed by its URL
     # without consulting it — so that refusal is unreachable for exactly the accounts
     # that need it. This one is on the path every request takes.
-    if request.reference_entities:
-        # STILL REFUSED — but NOT because the backend rejects it. The port is half done
-        # in a narrower way than previously recorded here (#723).
-        #
-        # What works: `attach_character_entities` drives the `@` picker, commits the
-        # chip, and verifies it carries data-reference-type="entity" with the requested
-        # id. `migrated.character_entities_attached` fires and Flow loads the
-        # character's voice sample. And the SUBMIT IS ACCEPTED: measured 2026-09-07,
-        # entity-bound submissions appear in Flow's own gallery as **Queued** and
-        # proceed. Nothing is refused server-side.
-        #
-        # What breaks is the OBSERVER, and the mechanism is exact:
-        #
-        #   MZZa6b -> [["wrb.fr","MZZa6b",null,null,null,[5],"generic"]]
-        #
-        # The submit reply carries a NULL payload, so it never names a media id and the
-        # `submitted` future in submit_and_observe never resolves. That wait is bounded
-        # by SUBMIT_REPLY_BUDGET_S (60 s), a value calibrated on runs where "the submit
-        # reply arrived 4.0-4.6 s after the click" — i.e. a plate-based generation
-        # against an idle queue. So the run times out (exit 9, TransportTimeoutError)
-        # while the job sits in Flow's queue and completes on its own.
-        #
-        # This is also what the ORIGINAL note here described as "the submit never
-        # produces a reply, three runs, 60 s each, cause unknown". Three timeouts
-        # against a queue, read as a refusal. Two later comments (including one of
-        # mine) hardened that misreading further; both were wrong.
-        #
-        # Queue latency is not incidental: Flow documents a limit of FIVE concurrent
-        # generations, and rate-limits per-minute throughput after heavy daily use, so
-        # 60 s is routinely too short in real production.
-        #
-        # THE FIX, when someone takes it: on a null submit payload, fall through to the
-        # status poll (jwpduf/as29s) keyed on the project instead of requiring the
-        # submit reply to name the media id, and make the budget configurable. The guard
-        # stays only until that lands, because today the CLI would report a timeout on a
-        # generation that is actually running — worse than an honest refusal.
+    if request.reference_entities and request.mode is not Mode.R2V:
         return "character references"
+    if len(request.reference_entities) > len(request.reference_entity_names):
+        # Attached by name through the `@` picker; an id alone has nothing to type, and
+        # would otherwise fail later as a confusing chip-count mismatch.
+        return "a character given by entity id without a name"
+    # R2V serves characters (#723): `run_video` attaches them through the `@` picker
+    # and `read_chips` verifies each entity chip before the billed click. The earlier
+    # refusal rested on a null submit reply (`MZZa6b -> [..., [5], "generic"]`,
+    # measured 2026-09-07) that no longer reproduces: on 2026-10-26 an entity-bound
+    # r2v run went end to end through the stock observer (exit 0). If that reply
+    # comes back, the run ends as an honest unknown outcome (exit 9), not a guess.
     if request.mode is Mode.T2V:
         return None
     if request.mode is Mode.R2V:
@@ -1181,7 +1156,7 @@ def _r2v_body_problem(body: str, rpcid: str, media_ids: tuple[str, ...]) -> str 
         other = [u for u in UUID_RE.findall(body) if u.lower() not in known]
         return (
             f"migrated host: the {rpcid} submit body is missing {len(missing)} of "
-            f"{len(media_ids)} uploaded reference(s) ({', '.join(missing[:3])}; ids in the "
+            f"{len(media_ids)} reference(s) ({', '.join(missing[:3])}; ids in the "
             f"body: {', '.join(other[:4]) or 'none'}) — the picker bound different assets"
         )
     return None
@@ -3692,6 +3667,7 @@ async def run_video(
     media_id: str | None = None
     end_media_id: str | None = None
     reference_ids: tuple[str, ...] = ()
+    entity_ids: tuple[str, ...] = ()
     frame = request.start_image
     if request.mode is Mode.I2V and frame is not None:
         media_id = await composer.attach_start_frame(page, pid, frame)
@@ -3703,7 +3679,7 @@ async def run_video(
         # #723: characters attach through the SAME `@` picker as media, so they go on
         # after any uploads (whose file chooser steals keyboard focus) and must not clear
         # mentions those uploads already placed.
-        await composer.attach_character_entities(
+        entity_ids = await composer.attach_character_entities(
             page,
             entity_ids=tuple(request.reference_entities),
             names=tuple(request.reference_entity_names),
@@ -3732,7 +3708,9 @@ async def run_video(
         project_id=pid,
         expect_media_id=media_id,
         expect_end_media_id=end_media_id,
-        expect_reference_ids=reference_ids,
+        # The committed entity ids ride the MZZa6b body beside the media ids (route-abort
+        # capture, 2026-10-27), so a character-only run is guarded too.
+        expect_reference_ids=reference_ids + entity_ids,
     )
     status = VideoStatus(
         media_id=record.media_id,

@@ -181,7 +181,7 @@ name can rank above the character. gflow therefore commits only the option title
 exactly that name, never on trial, and checks the committed chip's kind and name. The
 submit must then carry exactly the requested references, or it is aborted before Flow
 acts. The MCP image tool takes the same path. A `--reference-entity` id without a name
-still exits 36. Video characters on that host are not ported yet (#723 stays open).
+still exits 36. Local-file video r2v takes a named character on that host too (#723); t2v with a character still exits 36 (an i2v request cannot carry one at all).
 Contributed by @BeckZero.
 
 **`gflow image t2i --project-name` titles a multi-prompt run's project (#975).**
