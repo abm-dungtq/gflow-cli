@@ -67,6 +67,8 @@ submitted), so a second tab may only open after submit.
 - **Whether status polls on the generating page continue to status 3 after the loss.** Both
   paid runs stopped watching early (a probe bug, fixed in the script: it now decides
   "submitted" from the outgoing request). The fix's own e2e measures this leg.
+  **Since measured (2026-10-28, the fix's e2e):** yes. The adopted clip went from status 2
+  to 3 on the generating page's polls and downloaded; the listing fallback was not used.
 - How soon a new record appears in `Zzl0ze` after submit (it was there and done ~1 min later).
 - t2v and i2v. Only r2v ran; t2v has no uploaded id, so it relies on "new since the
   baseline" alone.

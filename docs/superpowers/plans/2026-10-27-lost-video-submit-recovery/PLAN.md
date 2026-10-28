@@ -219,20 +219,25 @@ done match, download it through the caller's path. Otherwise raise exit 9.
 
 ## Task 8: gates and the paid proof
 
-- [ ] `/gflow:check` green.
-- [ ] Paid e2e, with approval: about 24 credits (task 3: CLI + MCP, r2v). Run
+- [x] `/gflow:check` green.
+- [x] Paid e2e, with approval: about 24 credits (task 3: CLI + MCP, r2v). Run
       `--collect-only -q` first and count the ids against the budget.
-- [ ] Record in the PR whether the adopted run reached status 3 through the status polls
+- [x] Record in the PR whether the adopted run reached status 3 through the status polls
       or through the fallback. That is the spike's open question.
+
+**Result (2026-10-28, `ffroliva`, 2 r2v clips, about 24 credits):** `2 passed in 137.42s`,
+CLI and MCP. On the MCP row the lost `MZZa6b` reply was adopted from a `jwpduf` poll at
+status 2 in the same second, and the run went on to status 3 and downloaded through the
+normal terminal wait. Polls do continue after the loss; the listing fallback was not needed.
 
 ---
 
 ## Definition of done
 
-- [ ] All task steps checked off
-- [ ] `/gflow:check` green
-- [ ] `CHANGELOG.md` `[Unreleased]` updated
-- [ ] Docs updated (task 7)
-- [ ] BDD covers SCENARIO.md rows 1–14 as narrowed above
-- [ ] Paid e2e passed on CLI **and** MCP, output pasted with ids redacted
-- [ ] No `# TODO` without an issue link
+- [x] All task steps checked off
+- [x] `/gflow:check` green
+- [x] `CHANGELOG.md` `[Unreleased]` updated
+- [x] Docs updated (task 7)
+- [x] BDD covers SCENARIO.md rows 1–14 as narrowed above
+- [x] Paid e2e passed on CLI **and** MCP, output pasted with ids redacted
+- [x] No `# TODO` without an issue link
