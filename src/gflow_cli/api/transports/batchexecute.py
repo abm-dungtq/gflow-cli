@@ -288,6 +288,25 @@ def generation_record(
     )
 
 
+def generation_records_carrying(
+    rpcid: str, payload: Any, ids: tuple[str, ...]
+) -> list[GenerationRecord]:
+    """Every generation record whose submitted request (``[5][6][1]``) names one of ``ids``.
+
+    Picks a clip out by a media id its run uploaded when the submit reply was lost
+    (#1112). The prompt chips at ``[5][6][2]`` repeat a reference id, so only the request
+    list counts; an image record has no request there."""
+    wanted = set(ids)
+    found: list[GenerationRecord] = []
+    for node in _walk_lists(payload):
+        request = _at(node, 5, 6, 1)
+        if not _is_record(node) or request is None:
+            continue
+        if any(s in wanted for s in _strings(request)):
+            found.append(generation_record(rpcid, node, workflow_id=node[0]))
+    return found
+
+
 def image_records(rpcid: str, payload: Any) -> list[ImageGenerationRecord]:
     """Decode every completed image in the migrated ``ogiZ0b`` payload.
 

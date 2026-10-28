@@ -266,3 +266,53 @@ def test_rpc_errors_ignores_payload_frames_and_non_envelopes() -> None:
     assert rpc_errors(ok) == []
     assert rpc_errors("<html>login</html>") == []
     assert rpc_errors("") == []
+
+
+# --- records carrying an uploaded id (#1112) ------------------------------
+
+REF = "44444444-4444-4444-8444-444444444444"
+
+
+def _r2v_record(status: int, *, wf: str, media: str, ref: str | None) -> list[Any]:
+    """An r2v record as Zzl0ze / jwpduf list it: the request at [5][6][1] holds the
+    uploaded reference as ``[null, 4, id]`` and the prompt chips repeat it at [5][6][2]."""
+    rec = _record(status)
+    rec[0], rec[2] = wf, media
+    refs = [[None, 4, ref]] if ref else []
+    chips = [[None, [[ref, "blue_card.png"]]]] if ref else []
+    rec[5][6] = [
+        None,
+        [["abra_r2v_8s", 3, [5], None, 2, 1], refs, None, None, None, None, None, None, []],
+        [[None, None, [[*chips, [PROMPT]]]]],
+        None,
+        1,
+    ]
+    return rec
+
+
+def test_records_carrying_an_uploaded_id_skip_another_clip_and_the_image_1112() -> None:
+    """A poll right after a lost submit listed an older clip and the uploaded image's own
+    record beside ours (spike 2026-10-27); only ours carries our id in its request."""
+    from gflow_cli.api.transports.batchexecute import generation_records_carrying
+
+    older = _r2v_record(3, wf="99999999-9999-4999-8999-999999999999", media=MEDIA, ref=None)
+    ours = _r2v_record(2, wf=WF, media="55555555-5555-4555-8555-555555555555", ref=REF)
+    image = [REF, PROJ, "66666666-6666-4666-8666-666666666666", None, None, [[1, 2], None]]
+    payload = [None, None, [[older], [image], [ours]]]
+    got = generation_records_carrying("jwpduf", payload, (REF,))
+    assert [(r.workflow_id, r.status) for r in got] == [(WF, 2)]
+
+
+def test_an_id_only_in_the_prompt_chips_is_not_a_match_1112() -> None:
+    from gflow_cli.api.transports.batchexecute import generation_records_carrying
+
+    rec = _r2v_record(2, wf=WF, media=MEDIA, ref=REF)
+    rec[5][6][1][1] = []  # the request no longer names it; the chip text still does
+    assert generation_records_carrying("jwpduf", [None, None, [[rec]]], (REF,)) == []
+
+
+def test_no_ids_match_nothing_1112() -> None:
+    from gflow_cli.api.transports.batchexecute import generation_records_carrying
+
+    rec = _r2v_record(2, wf=WF, media=MEDIA, ref=REF)
+    assert generation_records_carrying("jwpduf", [None, None, [[rec]]], ()) == []
