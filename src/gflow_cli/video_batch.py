@@ -20,6 +20,8 @@ from rich.table import Table
 
 from gflow_cli._cli_helpers import _FLOW_ID_RE, safe_path_text
 from gflow_cli.api.client import FlowApiClient, validate_image_file
+from gflow_cli.api.transports.migrated_composer import MIGRATED_PROJECT_URL
+from gflow_cli.api.transports.migrated_recover import recover_clip
 from gflow_cli.api.video import (
     Aspect,
     GenerateVideoRequest,
@@ -27,6 +29,7 @@ from gflow_cli.api.video import (
     VideoModel,
     VideoResult,
     VideoStarted,
+    VideoStatus,
     validate_duration_for_model,
 )
 from gflow_cli.auth.auto_renew import (
@@ -50,12 +53,14 @@ from gflow_cli.errors import (
     FlowHostMigratedError,
     GFlowError,
     InsufficientCreditsError,
+    MediaDownloadError,
     ModelModeIncompatibilityError,
     RateLimitError,
     UiModeUnavailableError,
     UiSelectorDriftError,
     VideoModelSelectionError,
     WafRejectionError,
+    WireFormatError,
 )
 from gflow_cli.image_batch import (
     MAX_PROMPT_FILE_BYTES,
@@ -190,6 +195,7 @@ class VideoBatchOutcome:
     project_id: str | None = None
     error: str | None = None
     exit_code: int = 0
+    recovered: bool = False
 
 
 def _resolve_input_file(raw_path: str, *, label: str, base_dir: Path) -> Path:
@@ -653,6 +659,7 @@ async def _run_one_video_item(
                 media_id=started.media_id,
             )
 
+    recovered = False
     try:
         result: VideoResult = await client.generate_video(
             req=req,
@@ -664,32 +671,90 @@ async def _run_one_video_item(
         if result.status.succeeded:
             result = _relocate_downloaded_video(result, target)
     except Exception as exc:
-        record_failed_operation_safe(
-            recorder,
-            logger=logger,
-            profile_name=profile_name,
-            profile_dir=profile_dir,
-            command="video batch",
-            mode=OperationKind.I2V,
-            exc=exc,
-            request=req,
-            flow_project_id=started_holder[0].project_id if started_holder else project_id,
-            flow_media_ids=([started_holder[0].media_id] if started_holder else ()),
+        started = started_holder[0] if started_holder else None
+        row_pid = (started.project_id if started and started.project_id else None) or project_id
+        clip = None
+        recover_hint = ""
+        if started and started.media_id and isinstance(exc, (WireFormatError, MediaDownloadError)):
+            try:
+                clip = await recover_clip(
+                    client.page,
+                    project_id=row_pid,
+                    media_id=started.media_id,
+                    out_dir=target.parent,
+                )
+            except Exception as recover_exc:  # noqa: BLE001
+                logger.warning(
+                    "video_batch.recover_failed",
+                    index=item.index,
+                    media_id=started.media_id,
+                    error=str(recover_exc),
+                )
+                recover_hint = (
+                    f" (clip may be recoverable with: gflow data download {started.media_id})"
+                )
+            finally:
+                try:
+                    # recover_clip leaves the page on /edit/<media_id>, which ensure_editor
+                    # accepts as already in the project, so the next row would start there.
+                    await client.page.goto(
+                        MIGRATED_PROJECT_URL.format(project_id=row_pid),
+                        wait_until="domcontentloaded",
+                        timeout=45_000,
+                    )
+                except Exception as nav_exc:  # noqa: BLE001
+                    logger.warning(
+                        "video_batch.recover_return_to_project_failed",
+                        index=item.index,
+                        error=str(nav_exc),
+                    )
+        if clip is None or started is None:
+            record_failed_operation_safe(
+                recorder,
+                logger=logger,
+                profile_name=profile_name,
+                profile_dir=profile_dir,
+                command="video batch",
+                mode=OperationKind.I2V,
+                exc=exc,
+                request=req,
+                flow_project_id=row_pid,
+                flow_media_ids=([started.media_id] if started else ()),
+            )
+            if not isinstance(exc, GFlowError):
+                raise
+            outcome = VideoBatchOutcome(
+                index=item.index,
+                item=item,
+                status="fail",
+                media_id=started.media_id if started else None,
+                project_id=project_id,
+                error=f"{type(exc).__name__}: {exc}{recover_hint}",
+                exit_code=resolve_exit_code(exc),
+            )
+            if is_fatal_video_batch_error(exc):
+                return outcome, exc
+            return outcome, None
+        recovered = True
+        result = _relocate_downloaded_video(
+            VideoResult(
+                status=VideoStatus(
+                    media_id=clip.media_id,
+                    status="MEDIA_GENERATION_STATUS_SUCCESSFUL",
+                ),
+                local_path=clip.path,
+                project_id=row_pid,
+                flow_operation_id=started.flow_operation_id or clip.workflow_id,
+                workflow_id=clip.workflow_id or started.workflow_id,
+            ),
+            target,
         )
-        if not isinstance(exc, GFlowError):
-            raise
-        outcome = VideoBatchOutcome(
+        logger.info(
+            "video_batch.recovered",
             index=item.index,
-            item=item,
-            status="fail",
-            media_id=started_holder[0].media_id if started_holder else None,
-            project_id=project_id,
-            error=f"{type(exc).__name__}: {exc}",
-            exit_code=resolve_exit_code(exc),
+            media_id=clip.media_id,
+            bytes=clip.bytes,
         )
-        if is_fatal_video_batch_error(exc):
-            return outcome, exc
-        return outcome, None
 
     if recorder is not None:
         try:
@@ -735,6 +800,7 @@ async def _run_one_video_item(
             media_id=result.status.media_id,
             project_id=result.project_id or project_id,
             exit_code=0,
+            recovered=recovered,
         ),
         None,
     )
@@ -935,6 +1001,7 @@ def build_video_batch_json_payload(
                 "project_id": o.project_id,
                 "error": o.error,
                 "exit_code": o.exit_code,
+                **({"recovered": True} if o.recovered else {}),
             }
             for o in outcomes
         ],

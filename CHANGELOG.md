@@ -50,6 +50,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`gflow video batch` now recovers clips that finished generating and billed a `media_id` when the post-render download or 20s signed-URL grace fails.**
+  When `client.generate_video` raises `WireFormatError` or `MediaDownloadError` after `on_started`
+  has already recorded a `media_id`, `video batch` calls `recover_clip` once on the active browser
+  session (spending no additional credits) before returning the page to the project editor for the
+  next row. On success, the clip is moved to the row's target `output`, recorded as completed in the
+  local catalog, and reported as `status: "ok"`, `exit_code: 0`, `"recovered": true` in `--json`
+  output. If recovery fails, the original error and exit code are preserved with a
+  `gflow data download <media_id>` hint appended.
 - **Long image batches no longer fail every row once the shared reference scrolls away.**
   A local reference is uploaded once per run and then mentioned in place, but the editor
   lists only the newest part of the project grid; after enough rows the upload dropped out
