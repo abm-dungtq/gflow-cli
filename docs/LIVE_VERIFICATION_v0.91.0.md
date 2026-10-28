@@ -13,17 +13,21 @@
 | Transport | `ui_automation` → migrated composer; MCP over stdio (`gflow mcp run`) |
 | OS | Windows 11 (Google Chrome installed) |
 | Tree | release branch `chore/release-v0.91.0`, cut from `develop@7b6b9054`, rebased onto `develop@31d6226a` |
-| Veo credits spent | none in the release run. On the PRs: #1109 and #1115 ran paid `e2e_video` on `ffroliva` (about 24 credits each). Image daily quota: about 2 images in the release run, about 2 on the #1102 PR run |
+| Veo credits spent | about 24 in the final release run (the two paid Pip rows). On the PRs: #1109 and #1115 ran paid `e2e_video` on `ffroliva` (about 24 credits each). Image daily quota: about 2 images in the release run, about 2 on the #1102 PR run |
 
 ## Release e2e on the release tree
 
-`-m e2e` on `denon82`, one pytest process per file: **7 passed, 0 skipped, 0 failed.**
+Final run on 2026-10-28, on the release head `071f8bc6` (develop `ed2d9d7a` with #1104 and
+#1113 merged in), one pytest process per file: **10 passed, 0 failed.**
 
-| File | Result |
-|---|---|
-| `test_mcp_wait_false_bdd.py` | 2 passed (70 s). The mid-job close left the row `failed`; the server exited 1.4 s after stdin closed |
-| `test_migrated_selector_drift_e2e.py` (project `02419c61-…`) | 1 passed (11 s), "0 need attention" |
-| `test_auth_verification_e2e.py` | 4 passed (29 s) |
+| File | Profile | Result |
+|---|---|---|
+| `test_mcp_wait_false_bdd.py` | `denon82` | 2 passed (56 s) |
+| `test_migrated_selector_drift_e2e.py` (project `02419c61-…`) | `denon82` | 1 passed (9 s). A first run without `GFLOW_CLI_E2E_PROJECT` skipped and was re-run with it |
+| `test_auth_verification_e2e.py` | `denon82` | 4 passed (22 s) |
+| `test_migrated_r2v_character_bdd.py` (character Pip) | `ffroliva` | **3 passed** (2 min 57 s): CLI r2v + Pip, MCP r2v + Pip through the queue, id-only refused before submit. Re-run here because #1115 changed `migrated_composer.py` after #1109's own run |
+
+The first release run (2026-10-26, `develop@7b6b9054`, `denon82`) was 7/7 on the first three files.
 
 ## Summary
 
@@ -51,7 +55,13 @@
 
 ## Pre-tag gates
 
-- `/gflow:check` on the release tree: the six `scripts/ci` gates (now including
+- **Final tree (`071f8bc6`), 2026-10-28:** the six `scripts/ci` gates, ruff, format and
+  `pyright src` green; full offline suite `-n 8`: **5566 passed, 29 skipped, 93% coverage**.
+  `check_release_artifacts.py` OK. A delta council (3 auditors, on #1109/#1113/#1115/#1104)
+  returned YELLOW, YELLOW, RED: the RED was one false sentence in `docs/MCP.md` (r2v with a
+  character "exits 36"), fixed in `071f8bc6` with the other findings (`llms.txt`, README, USAGE
+  exit 36, both skills, AGENTS, CHANGELOG deps line, this ledger's i2v scope).
+- `/gflow:check` on the first release tree (2026-10-26): the six `scripts/ci` gates (now including
   `generate_plugin_skills.py --check`), ruff, format and `pyright src` are all green.
   `pytest -n 4` over `tests/mcp tests/api tests/features tests/worker` and the doc and config
   tests: **2726 passed, 6 skipped**. Each merged PR's head ran the full suite in CI.
@@ -74,3 +84,7 @@
   - Shipped plans removed: `2026-10-25-mcp-wait-false-runs`, `2026-10-26-mcp-tasks-sep2663`,
     `2026-10-26-agent-only-gate-count`.
   - Reports are at `tmp/council/0{1,2,3}-*.md` (local only).
+
+## Post-tag evidence
+
+- Filled after the tag is published.
