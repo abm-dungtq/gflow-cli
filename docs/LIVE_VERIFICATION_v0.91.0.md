@@ -1,7 +1,7 @@
 # Live verification — v0.91.0
 
 > Evidence for this release, gathered on 2026-10-26 (PRs #1103, #1106, #1107, plus #1101
-> merged after v0.90.0). Every row below was a run someone watched, not an inference. Where
+> merged after v0.90.0) and 2026-10-27 (#1109, #1115, each paid e2e on its PR head). Every row below was a run someone watched, not an inference. Where
 > a check could not be run, the blocker is named.
 
 ## Environment
@@ -12,8 +12,8 @@
 | Host Flow served | `flow.google.com`, classic composer |
 | Transport | `ui_automation` → migrated composer; MCP over stdio (`gflow mcp run`) |
 | OS | Windows 11 (Google Chrome installed) |
-| Tree | release branch `chore/release-v0.91.0`, cut from `develop@7b6b9054` |
-| Veo credits spent | none. Image daily quota: about 2 images in the release run, about 2 on the #1102 PR run |
+| Tree | release branch `chore/release-v0.91.0`, cut from `develop@7b6b9054`, rebased onto `develop@31d6226a` |
+| Veo credits spent | none in the release run. On the PRs: #1109 and #1115 ran paid `e2e_video` on `ffroliva` (about 24 credits each). Image daily quota: about 2 images in the release run, about 2 on the #1102 PR run |
 
 ## Release e2e on the release tree
 
@@ -33,6 +33,8 @@
 | `tasks/get` / `tasks/cancel` follow SEP-2663; `tasks/result` gone (#1102) | MCP Tasks extension | ✅ same e2e, over the wire: `tasks/get` reaches `completed` with `ttlMs: null`, no `ttl`, and the image file inline in `result.structuredContent`. Both protocol eras (`legacy`, `2026-07-28`) are covered by in-process `mcp.Client` tests (`-32601` for `tasks/result`, the cancel ack) | $0 beyond the image above |
 | The same over Streamable HTTP (#1102) | `gflow serve` on loopback | ✅ on the release tree: a real `gflow serve`, the SDK's HTTP client in both eras, against a completed task in the real catalog. `tasks/get` → `completed`, `ttlMs: null`, `result.isError: false` with 1 file (plus `resultType: "complete"` in `2026-07-28`); `tasks/result` → `-32601`; `tasks/cancel` → `{}` / `{resultType: "complete"}`. No browser started | $0 |
 | The agent-only credit confirmation is read before approval (#988) | agent-only composer: `image t2i`, `video t2v`, and their MCP twins | ❌ **blocked**: no profile here is served the agent-only composer (spike `2026-10-17-agent-only-cohort-profiles.md`). Offline: driver tests against a fixture of the DOM a contributor captured on en and ru, including over-count, late title, two gates at once and an unreadable title. A $0 run on the contributor's account was requested on #988 / PR #1107 | — |
+| Local-file r2v with a named character on flow.google.com (#723, PR #1109) | `video r2v --reference-entity` + `--reference-entity-name`; MCP `gflow_generate_video` | ✅ `test_migrated_r2v_character_bdd.py` on `ffroliva`, character Pip, head `a50b44ea`: **3 passed** (CLI clip downloaded with the entity attached; MCP the same; an id-only character refused before submit, exit 36, $0). Bound and refused cases are both e2e, CLI and MCP | 24 credits |
+| A lost video submit reply is followed to its clip (#1112, PR #1115) | `video r2v` / `i2v` from local files, CLI and MCP | ✅ `-k` the two r2v rows (checked with `--collect-only` first) on `ffroliva`, head `b292ccc8`: **2 passed** in 137 s. On the MCP row Chrome lost the `MZZa6b` body, gflow adopted the status record carrying its uploaded id in the same second, and the clip reached status 3 and downloaded. The second-tab listing read is offline-only: it never fired live, because the status polls kept running | about 24 credits |
 | Plugin-skills gate listed in the local routine (#1107) | contributor docs | out of scope: docs only | $0 |
 | Session-hardening lessons (#1103) | docs | out of scope: docs only | $0 |
 

@@ -5,7 +5,9 @@
 ## Current release
 
 **v0.91.0 — alpha.** MCP background generations now run, read back the way the Tasks
-extension says, and an agent-only credit confirmation is read before it is approved.
+extension says, an agent-only credit confirmation is read before it is approved, and on
+flow.google.com a reference-to-video takes a character and a lost video submit reply no
+longer loses the clip.
 
 **For agents.** `wait=false` on the MCP generation tools runs the job in the background of
 the server that accepted it; before, it saved the job and nothing ever ran it (#1097).
@@ -17,6 +19,11 @@ the server that accepted it; before, it saved the job and nothing ever ran it (#
 **Credit safety.** On an account Flow serves the agent-only composer, gflow reads how many
 generations a credit confirmation names and rejects one that quotes more than requested, so
 an agent cannot bill more than was asked for under a single approval (#988).
+
+**On flow.google.com.** Local-file `video r2v` attaches a named character with
+`--reference-entity` + `--reference-entity-name`, from the CLI and `gflow_generate_video`
+alike (#723). When Chrome loses the body of a video submit reply, gflow follows the clip it
+uploaded the references for to completion instead of failing a billed generation (#1112).
 
 Full ledger: [LIVE_VERIFICATION_v0.91.0](LIVE_VERIFICATION_v0.91.0.md).
 
@@ -674,7 +681,7 @@ migrated accounts (#795), and the agent-only composer driver (#799, #824 open).
 
 | Milestone | Status |
 |---|---|
-| MCP `wait=false` runs (#1097); `tasks/get` and `tasks/cancel` follow SEP-2663 (#1102); agent-only credit confirmation read before approval (#988) | ✅ done (v0.91.0) |
+| MCP `wait=false` runs (#1097); `tasks/get` and `tasks/cancel` follow SEP-2663 (#1102); agent-only credit confirmation read before approval (#988); r2v with a character on flow.google.com (#723); a lost video submit reply followed to its clip (#1112) | ✅ done (v0.91.0) |
 | `gflow run --resume` (#934); a local `--ref` uploaded once per project (#772); unwritable output, corrupt cookie store and signed-URL errors classified (#1091, #796, #941) | ✅ done (v0.90.0) |
 | Lost image replies recovered from the grid, upscale after generating, hidden picker refused (#1075, #1067, #788) | ✅ done (v0.89.1) |
 | Default project, Flow model names, clearer exit-11 causes, refuse-before-billing and diagnostics privacy (#1039, #1038, #883, #974, #984, #1008, #890) | ✅ done (v0.89.0) |
