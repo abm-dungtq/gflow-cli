@@ -507,22 +507,21 @@ async def test_a_character_named_without_an_id_attaches_as_an_entity() -> None:
     assert committed == ("ent-sussy",)
 
 
-def test_character_references_are_still_refused_until_a_submit_completes() -> None:
-    """The attach half is ported and proven; the submit half is not, so the gate stays.
-
-    `attach_character_entities` is verified live — the chip commits with the right
-    entity_id and Flow loads the character's voice — but the submit that follows produced
-    no reply in three runs. Until an entity-bound generation actually completes, refusing
-    instantly (exit 36) beats a 60-second timeout, so the gate must NOT be relaxed just
-    because the attach works. This test is the thing that stops that happening by
-    accident.
+def test_named_character_references_are_served_on_r2v() -> None:
+    """#723: the gate rested on a null entity-submit reply measured on 2026-09-07. On
+    2026-10-26 an entity-bound r2v run completed end to end through the stock observer,
+    so a named character is served. An id with no name has nothing to type into the `@`
+    picker and is refused before submit, as on the image path.
     """
     from gflow_cli.api.transports.migrated_composer import _unported_form
 
-    assert _unported_form(_r2v(reference_entities=("ent-kael",))) is not None
     assert (
         _unported_form(_r2v(reference_entities=("ent-kael",), reference_entity_names=("Kael",)))
-        is not None
+        is None
+    )
+    assert (
+        _unported_form(_r2v(reference_entities=("ent-kael",)))
+        == "a character given by entity id without a name"
     )
 
 
@@ -543,8 +542,7 @@ async def test_the_chip_count_refusal_states_the_numbers_it_compared(
     composer.send_prompt = AsyncMock()
     composer.read_chips = AsyncMock(return_value=[{"reference_type": "media"}])
     monkeypatch.setattr(mc, "MigratedComposer", lambda **_: composer)
-    # The character gate is lifted only to reach the guard it would sit behind.
-    monkeypatch.setattr(mc, "_unported_form", lambda _r: None)
+    # No `_unported_form` stub: a named character on r2v reaches the guard (#723).
 
     request = _r2v(
         reference_images=(Path("a.png"),),
@@ -564,3 +562,60 @@ async def test_the_chip_count_refusal_states_the_numbers_it_compared(
     detail = str(exc_info.value.detail)
     assert "1 image reference(s) + 1 character(s) = 2 chip(s) requested" in detail
     assert "1 on the prompt" in detail
+
+
+@pytest.mark.parametrize(
+    ("images", "uploaded", "expected"),
+    [((Path("a.png"),), ("m1",), ("m1", "ent-kael")), ((), (), ("ent-kael",))],
+    ids=["with-image", "character-only"],
+)
+async def test_the_submit_body_must_carry_the_committed_characters(
+    monkeypatch: pytest.MonkeyPatch,
+    images: tuple[Path, ...],
+    uploaded: tuple[str, ...],
+    expected: tuple[str, ...],
+) -> None:
+    """#723: the body guard checked only uploaded image ids, so a character-only r2v had
+    no body guard at all. The entity id rides the MZZa6b body (route-abort, 2026-10-27:
+    ``[null,null,["<entity id>","Kael"]]`` beside the uploaded ref), so it is required too.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from gflow_cli.api.transports import migrated_composer as mc
+    from gflow_cli.api.transports.batchexecute import GenerationRecord
+
+    composer = MagicMock()
+    composer.ensure_editor = AsyncMock(return_value="classic")
+    composer.apply_video_settings = AsyncMock()
+    composer.attach_references = AsyncMock(return_value=uploaded)
+    composer.attach_character_entities = AsyncMock(return_value=("ent-kael",))
+    composer.send_prompt = AsyncMock()
+    composer.read_chips = AsyncMock(
+        return_value=[{"reference_type": "media"}] * len(images) + [{"reference_type": "entity"}]
+    )
+    composer.submit_and_observe = AsyncMock(
+        return_value=GenerationRecord(
+            workflow_id="wf", project_id="p1", media_id="v1", status=3, video_url="https://x"
+        )
+    )
+    monkeypatch.setattr(mc, "MigratedComposer", lambda **_: composer)
+
+    request = _r2v(
+        reference_images=images,
+        reference_entities=("ent-kael",),
+        reference_entity_names=("Kael",),
+    )
+    await mc.run_video(
+        MagicMock(url="about:blank"),
+        request,
+        project_id="p1",
+        save=MagicMock(),
+        poll_timeout_s=1.0,
+        download=False,
+        on_started=None,
+    )
+    kwargs = composer.submit_and_observe.await_args.kwargs
+    assert kwargs["expect_reference_ids"] == expected
+    # #1112: only this run's uploads identify the clip after a lost reply; the entity id
+    # repeats in every clip that cast the character, so it must never be an adopt key.
+    assert kwargs["adopt_ids"] == uploaded

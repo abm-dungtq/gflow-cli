@@ -3,7 +3,7 @@
 5-Layer Evidence Ledger Verification:
 1. File / Queue Row Count: Asserts SQLite generation_queue row insertion and update.
 2. Magic Bytes / Field Value: Verifies task_id UUID, payload schema, and status transitions.
-3. Dimensions / Protocol Shape: Validates GetTaskResult / CancelTaskResult schema.
+3. Dimensions / Protocol Shape: tasks/get and tasks/cancel replies match SEP-2663.
 4. Structlog Invariants: Asserts task_enqueued log events.
 5. User-Confirmable Artifact: Produces evidence report at tmp/live-verify/mcp-tasks.md.
 """
@@ -52,9 +52,9 @@ async def main() -> None:
         context=None,
         params=GetTaskRequestParams(task_id=task_id),
     )
-    print(f"  GetTaskResult: task_id={get_res.task_id}, status={get_res.status}")
-    assert get_res.task_id == task_id
-    assert get_res.status == "working"
+    print(f"  tasks/get: taskId={get_res['taskId']}, status={get_res['status']}")
+    assert get_res["taskId"] == task_id
+    assert get_res["status"] == "working"
 
     # Layer 4: Cancel task via tasks/cancel
     print("[Layer 4] Canceling task via TasksExtension (tasks/cancel)...")
@@ -62,16 +62,20 @@ async def main() -> None:
         context=None,
         params=CancelTaskRequestParams(task_id=task_id),
     )
-    print(f"  CancelTaskResult: task_id={cancel_res.task_id}, status={cancel_res.status}")
-    assert cancel_res.task_id == task_id
-    assert cancel_res.status == "cancelled"
+    print(f"  tasks/cancel: {cancel_res}")
+    assert cancel_res == {}  # SEP-2663: an empty acknowledgement (#1102)
+    after = await ext._handle_get_task(context=None, params=GetTaskRequestParams(task_id=task_id))
+    assert after["status"] == "cancelled", after
 
     # Layer 5: Database state inspection
     repo = QueueRepository(store)
     db_task = repo.get_task(task_id)
     assert db_task is not None, "Task disappeared from SQLite queue"
-    assert db_task.status == "failed", f"DB status expected 'failed', got {db_task.status}"
-    print(f"[Layer 5] SQLite Queue Row verified: task_id={db_task.task_id}, status={db_task.status}")
+    # A job cancelled after submit is indeterminate (a credit may be spent), #1097.
+    assert db_task.status in ("failed", "indeterminate"), f"DB status {db_task.status!r}"
+    print(
+        f"[Layer 5] SQLite Queue Row verified: task_id={db_task.task_id}, status={db_task.status}"
+    )
 
     # Write evidence report to tmp/live-verify/mcp-tasks.md
     out_dir = Path("tmp/live-verify")
@@ -82,17 +86,19 @@ async def main() -> None:
         f"**Date:** 2026-08-04\n"
         f"**Task ID:** {task_id}\n"
         f"**Enqueue Status:** pending\n"
-        f"**GetTask Status:** {get_res.status}\n"
-        f"**CancelTask Status:** {cancel_res.status}\n"
+        f"**GetTask Status:** {get_res['status']}\n"
+        f"**Status after cancel:** {after['status']}\n"
         f"**DB Status:** {db_task.status}\n\n"
         f"### 5-Layer Evidence Ledger\n"
         f"1. File / Queue Row Count: 1 row created in SQLite generation_queue.\n"
         f"2. Magic Bytes / Field Value: Valid UUID task_id={task_id}.\n"
-        f"3. Dimensions / Protocol Shape: GetTaskResult and CancelTaskResult matched SEP-2663 types.\n"
+        f"3. Dimensions / Protocol Shape: tasks/get and tasks/cancel replies match SEP-2663.\n"
         f"4. Structlog Invariants: task_enqueued and task_cancelled events logged.\n"
         f"5. User-Confirmable Artifact: Evidence file generated at {evidence_path.absolute()}.\n"
     )
-    print(f"\n✅ 5-Layer Live Verification 100% PASSED! Report saved to: {evidence_path.absolute()}")
+    print(
+        f"\n✅ 5-Layer Live Verification 100% PASSED! Report saved to: {evidence_path.absolute()}"
+    )
 
 
 if __name__ == "__main__":

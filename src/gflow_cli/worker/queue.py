@@ -292,9 +292,12 @@ class QueueRepository:
         status: str,
         flow_media_id: str | None = None,
         error: dict[str, Any] | None = None,
+        only_from: tuple[str, ...] = (),
     ) -> None:
+        """Set a task's status; with ``only_from``, only while it is still in one of those."""
         now = _utc_now()
         error_str = json.dumps(error) if error is not None else None
+        guard = f" AND status IN ({','.join('?' * len(only_from))})" if only_from else ""
         try:
             with self._store.transaction(immediate=True):
                 self._store.conn.execute(
@@ -304,9 +307,9 @@ class QueueRepository:
                         flow_media_id = COALESCE(?, flow_media_id),
                         error_json = COALESCE(?, error_json),
                         updated_at = ?
-                    WHERE task_id = ?
-                    """,
-                    (status, flow_media_id, error_str, now, task_id),
+                    WHERE task_id = ?"""
+                    + guard,
+                    (status, flow_media_id, error_str, now, task_id, *only_from),
                 )
         except sqlite3.IntegrityError as exc:
             raise DataIntegrityError(detail=str(exc), route="queue.update_task_status") from exc
@@ -338,12 +341,14 @@ def _recovery_error(status: str, reason: str) -> dict[str, Any]:
                 f"Task interrupted ({reason}) after submit was attempted; a credit "
                 "may have been spent and the outcome is unknown. NOT retried automatically."
             ),
+            "reason": reason,
         }
     return {
         "type": "https://gflow-cli.dev/errors/daemon-recovery",
         "title": "Interrupted Before Submit",
         "status": 500,
         "detail": f"Task interrupted ({reason}) before any submit; nothing spent, safe to retry.",
+        "reason": reason,
     }
 
 
@@ -352,6 +357,7 @@ def mark_interrupted(
     task_id: str,
     checkpoint: dict[str, Any] | None,
     reason: str,
+    only_from: tuple[str, ...] = (),
 ) -> str:
     """Persist the truthful terminal state for one interrupted task and return it.
 
@@ -360,7 +366,9 @@ def mark_interrupted(
     one place.
     """
     status = classify_interrupted(checkpoint)
-    repo.update_task_status(task_id, status=status, error=_recovery_error(status, reason))
+    repo.update_task_status(
+        task_id, status=status, error=_recovery_error(status, reason), only_from=only_from
+    )
     return status
 
 

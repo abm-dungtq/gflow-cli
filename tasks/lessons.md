@@ -340,3 +340,31 @@ _End. Convert stable rules from this file into `project_conventions.md` once the
 Corollary: a bot cannot land a bump whose remediation spans hand-written source. Raising playwright also requires editing `SUPPORTED_PLAYWRIGHT_RANGE` in `src/gflow_cli/api/transports/ui_automation_video.py` and live-verifying a generation — so a bot-authored playwright minor is *never* mergeable, and letting it open is pure noise that red-lights the whole grouped batch.
 
 **Source:** Council review of PR #465 (playwright 1.61.0 → 1.62.0), which widened `<1.62.0` to `<1.63.0` and resolved the exact version documented as silently wedging `video i2v`. Only `tests/test_playwright_pin.py` stood in the way.
+
+---
+
+## 2026-10-26 — MCP `wait=false` runs (#1097, PR #1101)
+
+### L30 — A spike's stand-in must hold the resource the real job holds
+
+**Context:** The shutdown spike (`scripts/dev/spike_mcp_detached_shutdown.py`) detached a sleeping coroutine and found stdio shutdown safe. The live e2e then hung for more than 60 s: at stdin EOF, `asyncio.run` cancels Playwright's own connection too, so the job's browser could never close.
+
+**Rule:** In a spike about teardown, locks or connections, the stand-in opens the real resource. This is now a bullet in `skills/spike/SKILL.md` § What a spike must capture.
+
+### L31 — A source-grep test cannot see a missing `finally`
+
+**Context:** `test_stdio_drains_detached_jobs_before_asyncio_run_tears_down` asserted that `drain_detached()` comes after `mcp_server.run(` in the source text. It passed even though a transport error skipped the drain. The peer reviewer found it.
+
+**Rule:** Assert the behaviour: make the call raise and check the drain still ran. That test replaced the grep in `6cc5c979`.
+
+### L32 — The SDK's types are not the spec you declare
+
+**Context:** The server declares SEP-2663 (`io.modelcontextprotocol/tasks`), but mcp SDK 2.3.0 has types only for the 2025-11-25 tasks spec. The PR built `tasks/result` from those types. SEP-2663 removes that method.
+
+**Rule:** Before shaping a protocol method, read the MUST/SHOULD lines of the spec the server declares; a validating type proves nothing. The alignment work is tracked in #1102.
+
+### L33 — A peer review found what the author council missed
+
+**Context:** The author's 9-reviewer council returned YELLOW, and every must-fix was addressed. A fresh agent then reviewed the pinned head (`51e17c84`) and found four more defects: the drain not in a `finally`, a cancel before the first step leaving the row `pending`, the non-sticky `cancelled` status, and `KeyError` instead of `-32602`.
+
+**Rule:** Hand a self-authored PR to a reviewer that sees only the code, in a worktree pinned at the head, and name the claims to attack. The same pattern recurred on 2026-09-05, when every second-order defect was found by the reviewing session and none by the author.

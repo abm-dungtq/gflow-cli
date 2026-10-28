@@ -16,8 +16,12 @@ the first ``ogiZ0b`` reply; every submit request is counted on the browser conte
 so the run reads the new tile off the project grid and downloads it; the one-submit count
 still proves nothing re-submitted.
 
+**A video run that uploaded a file is followed to its clip (#1112).** The r2v rows run
+the CLI (in-process, so the patched ``Response.text`` reaches it) and the MCP tool; each
+counts the submit replies the observer read, so a second submit would show as two.
+
 **Cost.** Image: one image of daily quota, zero credits. Video: one Veo lite clip at the
-default length.
+default length, plus one r2v clip per surface row.
 """
 
 from __future__ import annotations
@@ -58,6 +62,8 @@ def _lose_first_body(
     real_text = Response.text
 
     async def text(self: Response) -> str:
+        if mc.url_rpcid(self.url) in rpcids:
+            world["replies"] = world.get("replies", 0) + 1
         if mc.url_rpcid(self.url) in rpcids and not world["lost"]:
             world["lost"] += 1
             raise PlaywrightError(LOST_BODY)
@@ -203,3 +209,77 @@ def _reported(world: dict[str, Any]) -> None:
     assert not is_retryable(err)
     assert "unreadable" in err.detail
     assert "project" in err.remediation_hint
+
+
+_R2V_PROMPT = "a blue card propped on a wooden jetty at dusk, static camera"
+
+
+@pytest.fixture
+def real_home(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """The CLI row resolves ``--profile`` against the real gflow home, not the test's."""
+    from gflow_cli.config import Settings, reset_settings
+
+    with monkeypatch.context() as m:
+        m.delenv("GFLOW_CLI_HOME", raising=False)
+        home = Settings().home
+    monkeypatch.setenv("GFLOW_CLI_HOME", str(home))
+    reset_settings()
+    yield home
+    reset_settings()
+
+
+@when("the CLI generates an r2v clip from a local reference image")
+def _cli_r2v(world: dict[str, Any], tmp_path: Path, real_home: Path) -> None:
+    from click.testing import CliRunner
+
+    from gflow_cli.cli_video import video
+
+    del real_home
+    out = tmp_path / "cli"
+    world["out"] = out
+    result = CliRunner().invoke(
+        video,
+        [
+            "r2v",
+            _R2V_PROMPT,
+            "--ref",
+            str(_png(tmp_path / "card.png")),
+            "--aspect",
+            "16:9",
+            "--out-dir",
+            str(out),
+            "--profile",
+            os.environ["GFLOW_CLI_E2E_PROFILE"].strip(),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
+@when("the MCP video tool generates an r2v clip from a local reference image")
+def _mcp_r2v(world: dict[str, Any], tmp_path: Path) -> None:
+    from gflow_cli.mcp import tools as mcp_tools
+
+    result = asyncio.run(
+        mcp_tools.gflow_generate_video(
+            prompt=_R2V_PROMPT,
+            mode="r2v",
+            aspect="16:9",
+            reference_images=[str(_png(tmp_path / "card.png"))],
+            profile=os.environ["GFLOW_CLI_E2E_PROFILE"].strip(),
+            wait=True,
+        )
+    )
+    assert result["status"] == "completed", result
+    world["files"] = [Path(p) for p in result["files"]]
+
+
+@then("exactly one video submit reply reached gflow")
+def _one_reply(world: dict[str, Any]) -> None:
+    assert world["lost"] == 1, "the ablation never fired: the run proves nothing"
+    assert world.get("replies") == 1, world.get("replies")
+
+
+@then("the clip is on disk")
+def _clip_on_disk(world: dict[str, Any]) -> None:
+    files = world.get("files") or list(world["out"].glob("*.mp4"))
+    assert files and all(p.stat().st_size > 100_000 for p in files), files

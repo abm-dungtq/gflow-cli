@@ -14,7 +14,9 @@ import hmac
 import io
 import os
 import sys
-from typing import Literal
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from typing import Any, Literal
 
 import structlog
 from mcp.server import MCPServer
@@ -26,6 +28,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from gflow_cli import __version__
 from gflow_cli.config import get_settings, reset_settings
+from gflow_cli.mcp import tasks_extension as tasks_module
 from gflow_cli.mcp.tasks_extension import TasksExtension
 
 log = structlog.get_logger()
@@ -281,6 +284,21 @@ def build_app(
         # transport's rebinding guard, or an unauthenticated caller learns the
         # Host allow-list from a 421.
         app.add_middleware(_BearerAuthMiddleware, token=token)
+
+    inner_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(a: Starlette) -> AsyncGenerator[Any]:
+        async with inner_lifespan(a) as state:
+            try:
+                yield state
+            finally:
+                # Here, not after serve(): uvicorn re-raises the stop signal once it
+                # has shut down, killing the process before asyncio.run cancels the
+                # wait=false jobs (spike 2026-10-25-mcp-detached-task-shutdown).
+                await tasks_module.drain_detached()
+
+    app.router.lifespan_context = lifespan
     return app
 
 
@@ -346,12 +364,17 @@ async def run_stdio() -> None:
     # stdout we captured above (MCPServer.run_stdio_async exposes no stdout
     # param). ``Server.run`` is the dual-era driver — see the docstring.
     mcp_server = server._lowlevel_server  # type: ignore[attr-defined]
-    async with stdio_server(stdout=protocol_stdout) as (read_stream, write_stream):
-        await mcp_server.run(
-            read_stream,
-            write_stream,
-            mcp_server.create_initialization_options(),
-        )
+    try:
+        async with stdio_server(stdout=protocol_stdout) as (read_stream, write_stream):
+            await mcp_server.run(
+                read_stream,
+                write_stream,
+                mcp_server.create_initialization_options(),
+            )
+    finally:
+        # Before asyncio.run cancels every task at once: that would cancel Playwright's
+        # own connection too, so a wait=false job's browser could not close cleanly.
+        await tasks_module.drain_detached()
 
 
 async def run_http(host: str = "127.0.0.1", port: int = 8000) -> None:

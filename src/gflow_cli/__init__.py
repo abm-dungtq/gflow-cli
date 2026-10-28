@@ -1,3 +1,3 @@
 """gflow-cli — CLI and MCP server for Google Flow."""
 
-__version__ = "0.90.0"
+__version__ = "0.91.0"

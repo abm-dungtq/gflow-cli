@@ -48,7 +48,7 @@ close Chrome yourself. On the measured account, `/about` was gone on the next ru
 
 ### Flow is migrating to `flow.google.com`; generation coverage is partial but includes images
 
-- **Status:** Open (partially resolved) · **Severity:** High for unported forms · **Affected:** on accounts the rollout has reached, `gflow video t2v`, local-file `video i2v` / `r2v`, `gflow image t2i`, local-file `gflow image i2i`, and a **single-segment** `gflow video extend` (#882: Flow's own Extend control, driven from the clip editor) now run on the migrated host. Image mode supports Nano Banana 2.1 (`nano2`, which replaced Nano Banana 2 there, #958) / 2 Lite / Pro, all five aspect ratios its radiogroup renders (16:9, 4:3, 1:1, 3:4, 9:16 — 3:4 appeared by 2026-09-17, #864), and count 1–4. Image prompts can tag a **character** with `@Name` / `--reference-entity` + `--reference-entity-name` since #723 (attached through the composer's `@` picker; an id without a name exits 36; video is unchanged). That matrix is the **classic** migrated composer's. On an **agent-only** composer ([#799](https://github.com/ffroliva/gflow-cli/issues/799)) gflow drives `image t2i` (all five aspects; count 1–4) and `video t2v` (one 9:16 or 16:9 clip) only — i2i, i2v, r2v and character references are refused there before anything is clicked. Image refs by UUID (except one the local catalog records in the same `--project`, referenced in place since #995), video `@Name` / `--reference-entity`, Agent instructions, Imagen 4, video frame refs by UUID/name, scenes, chained extend (`-n > 1`, `--scene`/`--resume-from`, `--seed`, an `--aspect` other than the source clip's), instructions and tools are not ported yet and fail before submit. **`character create` worked on the migrated host until its labs `createEntity` route was retired:** measured 2026-10-14 on a profile served flow.google.com, it exits 7 with "Flow RPCs have been deprecated" (404). `character list` does NOT: it reads the retired labs `projectInitialData` route and exits 7, measured 2026-09-20 both on `auto` and with `GFLOW_CLI_FLOW_HOST=flow.google.com` (#875). Of the remainder, only the i2v-by-UUID case rests on a positive observation of absence (the Frames picker tiles carry no media id); `scenes`, multi-segment `extend` (`-n > 1`, `--scene`/`--resume-from`, `--seed`), `instructions` and `tools` remain *unported by gflow*, never proven impossible on the host.
+- **Status:** Open (partially resolved) · **Severity:** High for unported forms · **Affected:** on accounts the rollout has reached, `gflow video t2v`, local-file `video i2v` / `r2v`, `gflow image t2i`, local-file `gflow image i2i`, and a **single-segment** `gflow video extend` (#882: Flow's own Extend control, driven from the clip editor) now run on the migrated host. Image mode supports Nano Banana 2.1 (`nano2`, which replaced Nano Banana 2 there, #958) / 2 Lite / Pro, all five aspect ratios its radiogroup renders (16:9, 4:3, 1:1, 3:4, 9:16 — 3:4 appeared by 2026-09-17, #864), and count 1–4. Image prompts can tag a **character** with `@Name` / `--reference-entity` + `--reference-entity-name` since #723 (attached through the composer's `@` picker; an id without a name exits 36). Local-file `video r2v` takes a character the same way, by `--reference-entity` + `--reference-entity-name` (#723). That matrix is the **classic** migrated composer's. On an **agent-only** composer ([#799](https://github.com/ffroliva/gflow-cli/issues/799)) gflow drives `image t2i` (all five aspects; count 1–4) and `video t2v` (one 9:16 or 16:9 clip) only — i2i, i2v, r2v and character references are refused there before anything is clicked. Image refs by UUID (except one the local catalog records in the same `--project`, referenced in place since #995), video `@Name`, `--reference-entity` on t2v/i2v, Agent instructions, Imagen 4, video frame refs by UUID/name, scenes, chained extend (`-n > 1`, `--scene`/`--resume-from`, `--seed`, an `--aspect` other than the source clip's), instructions and tools are not ported yet and fail before submit. **`character create` worked on the migrated host until its labs `createEntity` route was retired:** measured 2026-10-14 on a profile served flow.google.com, it exits 7 with "Flow RPCs have been deprecated" (404). `character list` does NOT: it reads the retired labs `projectInitialData` route and exits 7, measured 2026-09-20 both on `auto` and with `GFLOW_CLI_FLOW_HOST=flow.google.com` (#875). Of the remainder, only the i2v-by-UUID case rests on a positive observation of absence (the Frames picker tiles carry no media id); `scenes`, multi-segment `extend` (`-n > 1`, `--scene`/`--resume-from`, `--seed`), `instructions` and `tools` remain *unported by gflow*, never proven impossible on the host.
 - **Tracked:** [#639](https://github.com/ffroliva/gflow-cli/issues/639) · Reported 2026-09-02 against 0.59.0, 0.62.1, 0.63.0 and 0.65.0
 - **Confirmed live 2026-09-03 on a second, independent account** (`ffroliva`) — see [LIVE_VERIFICATION_v0.66.0](docs/LIVE_VERIFICATION_v0.66.0.md). A read-only probe of the migrated origin measured `i_total: 0`, reproducing the reporter's central measurement.
 - **`--reference-entity` was refused on `r2v` but not on `t2v`** ([#716](https://github.com/ffroliva/gflow-cli/issues/716), fixed in v0.71.0): the "not ported, exit 36" refusal above sat inside the r2v branch of the routing gate, so a `t2v` request carrying a character entity returned from that gate without its entities ever being inspected — and nothing downstream attaches one on this host. The generation was **submitted and billed** with the entity silently dropped, returning a plausible clip of the wrong person. The check is now mode-independent and ahead of every early return. If you ran `gflow video t2v @Name …` or `--reference-entity` on a moved account before this fix, the identity in those clips was never bound.
@@ -850,7 +850,7 @@ The contrasting message, **`no upload request ever left the page`**, means somet
 
 ### Chrome loses a reply body although Flow saved the write (migrated host)
 
-- **Status:** Mitigated · **Severity:** Medium (intermittent; the write usually saved) · **Affects:** the migrated `flow.google.com` host, local uploads (`--initial-frame`, `--ref`, `i2i` files), project create and rename, image submits · **Tracked:** [#1009](https://github.com/ffroliva/gflow-cli/issues/1009), [#1075](https://github.com/ffroliva/gflow-cli/issues/1075)
+- **Status:** Mitigated · **Severity:** Medium (intermittent; the write usually saved) · **Affects:** the migrated `flow.google.com` host, local uploads (`--initial-frame`, `--ref`, `i2i` files), project create and rename, image submits, video submits · **Tracked:** [#1009](https://github.com/ffroliva/gflow-cli/issues/1009), [#1075](https://github.com/ffroliva/gflow-cli/issues/1075), [#1112](https://github.com/ffroliva/gflow-cli/issues/1112)
 
 Distinct from #719 above, where no reply arrives at all. Here the reply arrives, but Chrome cannot hand its body over: `Network.getResponseBody: No data found for resource with given identifier`. Our spike saw it on 2 of 45 real `maseQ` uploads, and a fresh reload found both uploads saved ([spike](docs/superpowers/spikes/2026-10-20-migrated-upload-reply-body-eviction.md)). Before the fix, gflow reported the upload as a refused file (exit 27).
 
@@ -858,7 +858,9 @@ A project create or rename whose reply is late, not lost, takes the same path: o
 
 **Mitigation:** gflow now opens the project in a second tab and reads the outcome back: the new project's id, the saved title, or exactly one tile with the run's unique file name and a media id. Nothing is submitted twice. The readback can take up to about two minutes on a slow page.
 
-**Image submits (since v0.89.1, [#1075](https://github.com/ffroliva/gflow-cli/issues/1075)).** Flow had made the image every reported time. gflow now reads the run's new tile(s) off the project grid and downloads them, taking exactly the requested count once it holds still for a few seconds; an i2i reference is never counted. Any other count, or a grid it cannot read, still ends in exit **9** (`retryable: false`) naming the project page, and so does a lost **video** submit reply: check the project before re-running.
+**Image submits (since v0.89.1, [#1075](https://github.com/ffroliva/gflow-cli/issues/1075)).** Flow had made the image every reported time. gflow now reads the run's new tile(s) off the project grid and downloads them, taking exactly the requested count once it holds still for a few seconds; an i2i reference is never counted. Any other count, or a grid it cannot read, still ends in exit **9** (`retryable: false`) naming the project page: check the project before re-running.
+
+**Video submits ([#1112](https://github.com/ffroliva/gflow-cli/issues/1112)).** About 1 in 7 r2v submits lost this reply in a 21-clip run, and Flow made and billed every one. A video run that uploaded a file (`--ref`, `--initial-frame`, `--end-frame`) is now followed to its clip: Flow's own status replies name the clip by the id of that upload, and if none does within a minute, gflow reads the project listing in a second tab. The run then finishes and downloads as usual, with one `migrated.video_submit_reply_lost` warning and no second submit ([spike](docs/superpowers/spikes/2026-10-27-lost-video-submit-recovery.md)). A text-to-video run, or an r2v run with characters only, uploads nothing that tells its clip apart from the project's other clips, so it still ends in exit **9** (`retryable: false`) naming the project. So does a run where two clips carry the upload, or none appears in time. Check the project before re-running.
 
 **If it cannot confirm the outcome**, the command exits **7** with `RpcResponseUnavailableError` (`retryable: false`). The write may have saved. Open the project on flow.google.com and look for the title or the file name in the error before you re-run, or you may get a duplicate project or upload. `gflow run` does not re-upload a reference file after this error in the same run.
 
@@ -952,6 +954,18 @@ The worker queue (`generation_queue`, used by the `gflow serve` daemon and MCP t
 **Why this can't be resolved automatically today:** Flow's generation-status REST endpoint rejects a bare, cookie-only `page.request` re-check with HTTP 401 — only a live, authenticated Playwright SPA re-poll (opening the project page and reading the DOM) can turn a preserved handle back into a real status, and that live re-poll path is not wired into recovery yet (tracked for a future phase; see the C1 handle-spike notes in `docs/superpowers/specs/2026-07-19-production-readiness-hardening-design.md` Appendix A).
 
 **Decision (2026-07-21):** keep the safe stub — `recover_processing` marks post-submit interruptions `indeterminate` and never auto-resubmits, which is already correct. Building the auto-reconciler is deferred until **F1** (credit-free project-page re-entry) is confirmed against live Flow; until then a blind reconciler would be speculative code against unverified blackbox behavior. The `client` reconcile-hook seam and the live-gated `tests/e2e/test_crash_recovery_e2e.py` are already in place for when F1 lands.
+
+**A server that is killed, not stopped (#1097).** An MCP `wait=false` job runs inside the
+`gflow mcp run` / `gflow serve` process that accepted it. Closing the client, or stopping
+`gflow serve`, cancels it and records the truthful state above. A process killed outright
+(`taskkill /F`, `kill -9`, a crashed client host) records nothing, so its row stays
+`processing` and `tasks/get` keeps answering `working`. A job killed before it was picked
+up stays `pending` the same way; `tasks/cancel` clears that one. Two narrower cases end the
+same way: a job whose browser takes longer than 10 s to close during shutdown, and a
+`tasks/cancel` sent to a server other than the one running the job (each server can stop
+only its own jobs; it reports the row's real status instead). Reconcile it by hand as below.
+Nothing resets such rows on its own: a startup sweep would also fail a job that another
+live `gflow mcp run` (one per client session) is still running.
 
 **Manual reconciliation:** an `indeterminate` row's checkpoint retains whatever handle/project info was captured before interruption. To resolve one by hand: open the relevant Flow project in the browser and check whether the expected asset appears.
 - **Found** — the generation completed; no action needed (the credit was spent as intended, just not auto-recorded locally).
@@ -1402,8 +1416,9 @@ aspect / model / count are Agent-settings **defaults** rather than per-request c
 Agent settings, saves, sends a natural-language request to the agent, and **restores those
 three defaults afterwards**. "Confirm before generating" follows
 [`GFLOW_CLI_AGENT_CONFIRM`](docs/CONFIGURATION.md#gflow_cli_agent_confirm) and is not restored.
-With a confirmation step, gflow approves exactly one that its own submit produced and stops
-without approving a second. Live-verified 2026-09-15 on a Google AI Pro account (`en`):
+With a confirmation step, gflow reads the count of the one its own submit produced, approves
+it only when that count is within the request, and stops without approving a second (see
+the confirmation bullet below, #988). Live-verified 2026-09-15 on a Google AI Pro account (`en`):
 t2i 3:4 × 2 (896×1200 each), t2v 4 s 9:16 (ready 69 s after submit, MP4 downloaded).
 
 **Not driven yet on this composer** (exit 36, before anything is clicked): image-to-image,
@@ -1421,12 +1436,17 @@ video per request.
   `img[data-media-id]`; gflow downloads the original size by rewriting the size spec to `=s0`.
 - The request text is English. Whether the agent honours it on a non-English account is
   unmeasured (the original reporter's account is `ru`).
-- **The confirmation step does not bound the spend of the first ask.** gflow approves the
-  first confirmation without reading the count it names, and one confirmation can cover
-  several generations. Only a *second* confirmation is stopped before billing; an agent that
-  queues more than requested under the first is detected after the fact (more clips pending,
-  or more images on the grid, than requested), with the credits already spent — even with
-  `GFLOW_CLI_AGENT_CONFIRM=always`.
+- **The confirmation is read before it is approved
+  ([#988](https://github.com/ffroliva/gflow-cli/issues/988)).** One confirmation can cover
+  several generations, so gflow reads the numbers in its title (count first, credits last,
+  measured on English and Russian) and **rejects** it when it quotes more than requested:
+  nothing is approved, exit 25. A video confirmation whose numbers cannot be read is not
+  approved either (exit 25; it stays open in Flow — reject it there). Not yet measured: the
+  wording of a confirmation for several clips, and of an image confirmation; an image one
+  that cannot be read is approved, and more images than requested still fail the run after
+  the fact. Only a confirmation is checked: with `GFLOW_CLI_AGENT_CONFIRM=never`, or an
+  account set to Never under `account`, Flow asks nothing, and an over-count is detected
+  only after the credits are spent.
 - An image whose orientation does not match the requested aspect is kept (the run is
   billed and the file is valid) and logged as `migrated.agent_only.aspect_mismatch`.
 

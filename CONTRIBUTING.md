@@ -208,6 +208,7 @@ uv run python scripts/ci/check_doc_links.py           # internal Markdown links
 uv run python scripts/ci/check_website_docs_pii.py    # no private identifiers in website/docs
 uv run python scripts/ci/generate_website_docs.py --check  # website mirror in sync
 uv run python scripts/ci/check_council_memory.py      # council memory slugs resolve both ways
+uv run python scripts/ci/generate_plugin_skills.py --check  # shipped plugin skills match skills/
 uv run ruff check src tests          # lint
 uv run ruff format --check src tests # formatting
 uv run pyright src                   # type-check (strict on src/gflow_cli/)
@@ -243,7 +244,7 @@ contributor is blocked for lacking the plugin.
 
 ### SonarCloud quality gate
 
-On top of the six gates, CI runs a **SonarCloud** analysis whose quality gate must be
+On top of the ten gates, CI runs a **SonarCloud** analysis whose quality gate must be
 **green** before a PR is merge-ready — the target is **zero new issues** on changed code
 (new bugs, vulnerabilities, and code smells = 0; coverage of new lines ≥ 80%; security
 hotspots reviewed = 100%). The local `--cov-fail-under=80` gate already pre-empts the

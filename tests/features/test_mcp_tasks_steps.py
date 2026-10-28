@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
 import pytest
+from mcp.shared.exceptions import MCPError
+from mcp.types import CancelTaskRequestParams, GetTaskRequestParams
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from gflow_cli.data.store import DataStore
+from gflow_cli.mcp.tasks_extension import TasksExtension
 
 scenarios("mcp_tasks.feature")
 
@@ -45,18 +49,6 @@ def enqueued_task(task_id: str, temp_db: DataStore) -> None:
     )
 
 
-@given(parsers.parse('a running generation task "{task_id}" holding a profile lease'))
-def running_task_with_lease(task_id: str, temp_db: DataStore) -> None:
-    temp_db.conn.execute(
-        """
-        INSERT INTO generation_queue
-        (task_id, profile_name, task_type, payload_json, status, created_at, updated_at)
-        VALUES (?, 'default', 'video', '{}', 'processing', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """,
-        (task_id,),
-    )
-
-
 @given(parsers.parse('no task exists with ID "{task_id}"'))
 def no_task_exists(task_id: str, temp_db: DataStore) -> None:
     pass
@@ -75,24 +67,21 @@ def invoke_mcp_tool(tool_name: str, prompt: str, mcp_context: dict[str, Any]) ->
 
 @when(parsers.parse('the MCP client sends a "tasks/get" request for "{task_id}"'))
 def send_tasks_get(task_id: str, mcp_context: dict[str, Any], temp_db: DataStore) -> None:
-    cursor = temp_db.conn.execute(
-        "SELECT task_id, status FROM generation_queue WHERE task_id = ?",
-        (task_id,),
-    )
-    row = cursor.fetchone()
-    if row:
-        mcp_context["response"] = {"task_id": row["task_id"], "status": row["status"]}
-    else:
-        mcp_context["response"] = {"error": {"code": -32602, "message": "Task not found"}}
+    try:
+        mcp_context["response"] = _get(temp_db, task_id)
+    except MCPError as exc:
+        mcp_context["response"] = {"error": {"code": exc.code, "message": str(exc)}}
+
+
+def _get(store: DataStore, task_id: str) -> dict[str, Any]:
+    handler = TasksExtension(data_store=store)._handle_get_task  # pyright: ignore[reportPrivateUsage]
+    return asyncio.run(handler(None, GetTaskRequestParams(task_id=task_id)))
 
 
 @when(parsers.parse('the MCP client sends a "tasks/cancel" request for "{task_id}"'))
 def send_tasks_cancel(task_id: str, mcp_context: dict[str, Any], temp_db: DataStore) -> None:
-    temp_db.conn.execute(
-        "UPDATE generation_queue SET status = 'failed' WHERE task_id = ?",
-        (task_id,),
-    )
-    mcp_context["response"] = {"status": "failed"}
+    handler = TasksExtension(data_store=temp_db)._handle_cancel_task  # pyright: ignore[reportPrivateUsage]
+    mcp_context["response"] = asyncio.run(handler(None, CancelTaskRequestParams(task_id=task_id)))
 
 
 @when(parsers.parse('the client invokes "{tool_name}" with prompt "{prompt}"'))
@@ -114,18 +103,17 @@ def check_task_handle_returned(status: str, mcp_context: dict[str, Any]) -> None
 @then("the server returns the current task status and details.")
 def check_task_status_details(mcp_context: dict[str, Any]) -> None:
     resp = mcp_context["response"]
-    assert resp is not None and "task_id" in resp
+    assert resp is not None and "taskId" in resp and resp["status"] == "working"
 
 
-@then(parsers.parse('the task status is updated to "{expected_status}"'))
-def check_task_status_updated(expected_status: str, mcp_context: dict[str, Any]) -> None:
-    resp = mcp_context["response"]
-    assert resp is not None and resp.get("status") == expected_status
+@then("the cancel is an empty acknowledgement")
+def check_cancel_ack(mcp_context: dict[str, Any]) -> None:
+    assert mcp_context["response"] == {}
 
 
-@then("the profile lease is released cleanly.")
-def check_profile_lease_released() -> None:
-    pass
+@then(parsers.parse('tasks/get then reports "{task_id}" as "{expected_status}".'))
+def check_task_status_after(task_id: str, expected_status: str, temp_db: DataStore) -> None:
+    assert _get(temp_db, task_id)["status"] == expected_status
 
 
 @then(parsers.parse("the server returns a TaskNotFoundError with error code {code:d}."))

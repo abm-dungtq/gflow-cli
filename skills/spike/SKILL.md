@@ -85,6 +85,14 @@ Write a new `scripts/dev/spike_<question>.py` when none fits. It should record:
   what `elementFromPoint` returns over it.
 - **A control.** If you are testing a fix, run the same probe with the fix stashed. A
   result with no control is a coincidence with formatting.
+- **A stand-in that holds what the real job holds.** A fake job proves only what the
+  fake holds. The #1097 shutdown spike detached a sleeping coroutine and measured stdio
+  shutdown as safe. A real job holds a Playwright browser, and at stdin EOF
+  `asyncio.run` cancels Playwright's connection with everything else: 40 s or more of
+  close timeouts, found only by the live e2e
+  ([spike](../../docs/superpowers/spikes/2026-10-25-mcp-detached-task-shutdown.md)).
+  If the question is about teardown, locks or connections, the stand-in must open the
+  real resource.
 
 ## Cost discipline
 

@@ -30,6 +30,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from gflow_cli.api.transports._common import raise_if_known_landing
 from gflow_cli.api.transports.batchexecute import find_record, parse_frames
 from gflow_cli.api.transports.migrated_composer import (
+    LISTING_RPC,
     MIGRATED_PROJECT_URL,
     MODEL_KEY,
     MigratedComposer,
@@ -63,7 +64,6 @@ log = structlog.get_logger(__name__)
 
 EXTEND_SUBMIT_RPC = "fZytfe"
 SCENE_CREATE_RPC = "rqZuUc"
-LISTING_RPC = "Zzl0ze"
 #: The page's aspect index in the ``fZytfe`` request entry (measured 2 = 16:9; #882's
 #: live capture 1 = 9:16).
 ASPECT_BY_INDEX = {1: "9:16", 2: "16:9"}

@@ -12,10 +12,11 @@ Shape of a run:
    "Confirm before generating" radio follows ``GFLOW_CLI_AGENT_CONFIRM`` and is NOT
    restored — it is the user's standing choice.
 2. A natural-language **directive** goes into the ProseMirror editor and is submitted.
-3. At most **one credit gate** that appeared after our own submit is approved. Gates from
-   earlier sessions survive reloads, so a gate present before submit is never ours; a
-   second gate means the agent asked for more than one generation, and the run stops
-   without approving it.
+3. At most **one credit gate** that appeared after our own submit is approved, and only
+   after its title has been read: a gate quoting more clips than requested is rejected
+   (#988). Gates from earlier sessions survive reloads, so a gate present before submit is
+   never ours; a second gate means the agent asked for more than one generation, and the
+   run stops without approving it.
 4. Completion is observed in the **DOM**, not on the wire: this composer never fires the
    classic ``ogiZ0b`` image reply, and ``as29s`` records name uuids absent from the page.
    An image is a grid tile whose media id (``img[data-media-id]``; the src is an opaque
@@ -97,6 +98,14 @@ IN_FLIGHT = "flow-stop-icon-button"
 LIVE_GATE = "flow-permission-message:has(div[role='radio'].option-row:not(.read-only))"
 #: Approve is the first `check` row; the second `check` is "Always approve".
 APPROVE_ROW = "div[role='radio'].option-row:not(.read-only):has(mat-icon:text-is('check'))"
+#: Reject is the only `close` row (#988, measured on en and ru, 2026-10-23).
+REJECT_ROW = "div[role='radio'].option-row:not(.read-only):has(mat-icon:text-is('close'))"
+#: The gate's question: "...kick off this 1 video generation, costing 10 credits?" (en),
+#: "Сгенерировать 1 видео за бонусы (10)?" (ru). Its words are translated, its number tokens
+#: are not: count first, credits last on both (#988). Like the duration radio's number
+#: (#963) that meets the locale-invariance exception bar, and a video gate whose numbers
+#: cannot be read is never approved.
+GATE_TITLE = "p.title"
 LAST_REPLY = "flow-chat-bubble"
 
 #: Toggle groups in DOM order (measured): image aspect, image count, video aspect, video count.
@@ -125,6 +134,13 @@ _AFTER_SUBMIT_HINT = (
     "Check the Flow project and the agent's last reply before submitting again - the request "
     "was already sent, and a re-run submits (and may bill) another one."
 )
+#: Said only once a rejected gate was seen to turn read-only.
+_REJECTED_HINT = (
+    "The credit confirmation was rejected before approval, so nothing was approved. Check "
+    "the Flow balance before re-running, and word the prompt so the agent asks for exactly "
+    "what was requested."
+)
+_NUMBER_RE = re.compile(r"\d+")
 
 _CDN_MEDIA_RE = re.compile(
     r"^https://flow-content\.google/(image|video)/([0-9a-fA-F-]{36})(?:[?#]|$)"
@@ -261,6 +277,20 @@ def _video_uuids(state: dict[str, Any]) -> list[str]:
         if m:
             seen.setdefault(m.group(2).lower(), None)
     return list(seen)
+
+
+def gate_quotes_more(title: str, count: int) -> bool | None:
+    """Whether a credit gate's title quotes more than ``count`` generations (#988).
+
+    None while the title is not readable: the count and the credits are both needed, so a
+    title rendered halfway ("...kick off this 1") never parses. Every number but the last
+    (the credits) is checked, so a digit the prompt slipped in can only refuse, not approve
+    - as long as Flow writes the count as a digit, as it did on every measured title.
+    """
+    numbers = [int(n) for n in _NUMBER_RE.findall(title)]
+    if len(numbers) < 2:
+        return None
+    return any(n > count for n in numbers[:-1])
 
 
 def _tile_key(tile: dict[str, str]) -> str:
@@ -527,7 +557,10 @@ class AgentOnlyComposer:
 
     async def _approve_gate(self, page: Page, baseline_gates: int) -> None:
         try:
-            await page.locator(LIVE_GATE).last.locator(APPROVE_ROW).first.click(timeout=5000)
+            # The gate whose title was read, not ``.last``: with two live at once, the
+            # newer one's count was never checked (#988 review).
+            gate = page.locator(LIVE_GATE).nth(baseline_gates)
+            await gate.locator(APPROVE_ROW).first.click(timeout=5000)
         except PlaywrightError as exc:
             # After the submit: whether the gate took the click is unknown, so never retry.
             raise FlowAgentUiError(
@@ -560,9 +593,11 @@ class AgentOnlyComposer:
                     "again)."
                 ),
             )
-        if await page.locator(LIVE_GATE).count() <= run.baseline_gates:
+        live = await page.locator(LIVE_GATE).count()
+        if live <= run.baseline_gates:
             return False
-        if run.approvals:
+        # Two new gates at once: only one can be read before an approval (#988 review).
+        if run.approvals or live > run.baseline_gates + 1:
             raise FlowAgentUiError(
                 detail=(
                     "agent-only composer: the agent asked for a second credit "
@@ -573,8 +608,69 @@ class AgentOnlyComposer:
                 retryable=False,
                 remediation_hint=_AFTER_SUBMIT_HINT,
             )
+        if not await self._gate_within_count(page, run):
+            await asyncio.sleep(POLL_S)  # the title is still rendering
+            return True
         await self._approve_gate(page, run.baseline_gates)
         run.approvals += 1
+        return True
+
+    async def _gate_within_count(self, page: Page, run: _Run) -> bool:
+        """False while the gate's title is unreadable; raises when it must not be approved."""
+        gate = page.locator(LIVE_GATE).nth(run.baseline_gates)
+        try:
+            title = await gate.locator(GATE_TITLE).first.inner_text(timeout=2000)
+        except PlaywrightError:
+            title = ""
+        quotes_more = gate_quotes_more(title, run.count)
+        shown = redact_sensitive_text(title[:200]) or "(no title)"
+        if quotes_more:
+            rejected = await self._reject_gate(page, run.baseline_gates)
+            log.warning("migrated.agent_only.gate_rejected", count=run.count, settled=rejected)
+            raise FlowAgentUiError(
+                detail=(
+                    "agent-only composer: the credit confirmation quotes more than the "
+                    f"{run.count} requested, so it was rejected, not approved. It read: {shown}"
+                ),
+                retryable=False,
+                remediation_hint=_REJECTED_HINT if rejected else _AFTER_SUBMIT_HINT,
+            )
+        if quotes_more is False:
+            return True
+        if run.gate_seen_at is None:
+            run.gate_seen_at = time.monotonic()
+        if time.monotonic() - run.gate_seen_at < GATE_SETTLE_S:
+            return False
+        if run.kind == "image":
+            # Unmeasured title shape. Images cost no credits, and _await_images still
+            # refuses a run that made more than requested.
+            log.warning("migrated.agent_only.gate_count_unread", kind=run.kind)
+            return True
+        raise FlowAgentUiError(
+            detail=(
+                "agent-only composer: could not read how many videos the credit confirmation "
+                f"would bill, so it was not approved. It read: {shown}"
+            ),
+            retryable=False,
+            remediation_hint=(
+                "Nothing was approved, but the confirmation is still open in the Flow "
+                "project: reject it there. Please report its wording in an issue so gflow "
+                "can read it."
+            ),
+        )
+
+    async def _reject_gate(self, page: Page, baseline_gates: int) -> bool:
+        """Click Reject; True once the gate is seen to turn read-only."""
+        gate = page.locator(LIVE_GATE).nth(baseline_gates)
+        try:
+            await gate.locator(REJECT_ROW).first.click(timeout=5000)
+            await (
+                page.locator(LIVE_GATE)
+                .nth(baseline_gates)
+                .wait_for(state="detached", timeout=GATE_SETTLE_S * 1000)
+            )
+        except PlaywrightError:
+            return False
         return True
 
     async def _video_baseline(self, page: Page) -> tuple[set[str], str | None]:
@@ -625,7 +721,7 @@ class AgentOnlyComposer:
             baseline, baseline_head = await self._any_uuids(page), None
         await self._submit(page, directive)
         log.info("migrated.agent_only.submitted", kind=kind, count=count)
-        run = _Run(kind, budget_s, time.monotonic() + budget_s, baseline_gates)
+        run = _Run(kind, budget_s, time.monotonic() + budget_s, baseline_gates, count)
         if kind == "video":
             return await self._await_video(
                 page, run, count, baseline, baseline_head, on_first_media
@@ -734,7 +830,10 @@ class _Run:
     budget_s: float
     deadline: float
     baseline_gates: int
+    count: int
     approvals: int = 0
+    #: When this run's gate was first seen with a title that could not be read yet.
+    gate_seen_at: float | None = None
 
 
 async def _maybe_await(value: object) -> None:

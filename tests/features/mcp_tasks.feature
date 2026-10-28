@@ -14,11 +14,11 @@ Feature: MCP Tasks Extension (SEP-2663)
     When the MCP client sends a "tasks/get" request for "task-uuid-123"
     Then the server returns the current task status and details.
 
-  Scenario: Canceling an in-flight generation task
-    Given a running generation task "task-uuid-456" holding a profile lease
+  Scenario: Canceling a queued generation task
+    Given an enqueued generation task with ID "task-uuid-456"
     When the MCP client sends a "tasks/cancel" request for "task-uuid-456"
-    Then the task status is updated to "failed"
-    And the profile lease is released cleanly.
+    Then the cancel is an empty acknowledgement
+    And tasks/get then reports "task-uuid-456" as "cancelled".
 
   Scenario: Requesting status for an unknown task ID
     Given no task exists with ID "non-existent-task"

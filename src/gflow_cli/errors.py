@@ -787,8 +787,9 @@ class FlowAgentUiError(GFlowError):
     membership in ``RETRYABLE_ERRORS``, and hence the default remediation's advice to
     try another profile. On the migrated ``flow.google.com`` host an account whose
     composer is **agent-only** (#799) is driven by ``agent_only_composer``; there this
-    error means the agent did something other than what was asked — a second credit
-    confirmation, more results than requested, or a turn that produced nothing — and
+    error means the agent did something other than what was asked — a credit
+    confirmation quoting more than requested (rejected) or one whose count cannot be read,
+    a second confirmation, more results than requested, or a turn that produced nothing — and
     those raise sites pass ``retryable=False``, because a blind re-run repeats the ask.
     """
 

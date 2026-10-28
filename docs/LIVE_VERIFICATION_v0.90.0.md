@@ -75,4 +75,8 @@
 
 ## Post-tag evidence
 
-To be filled after the tag's `Release` workflow publishes to PyPI.
+- Signed tag `v0.90.0` (SSH signature present) on `164b8d26`, pushed 2026-10-25.
+- `Release` workflow run 40191081861: **success** (`build-and-publish`, `mcp-registry / publish`).
+- PyPI `gflow-cli` reports `0.90.0` as the latest version.
+- GitHub Release: https://github.com/ffroliva/gflow-cli/releases/tag/v0.90.0 (not a prerelease).
+- Release PR #1099 merged into `main` (merge commit `c073c531`); back-merge into `develop` `427d39cc`.

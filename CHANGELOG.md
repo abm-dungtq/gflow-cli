@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.91.0] — 2026-10-28
+
+### Fixed
+
+- **A video whose submit reply Chrome lost now finishes with its clip on flow.google.com**
+  ([#1112](https://github.com/ffroliva/gflow-cli/issues/1112)). About 1 in 7 r2v submits
+  lost the reply body while Flow made and billed the clip, and gflow ended with exit 9. A
+  run that uploaded a file (`--ref`, `--initial-frame`, `--end-frame`) now picks its clip
+  out of Flow's status replies by that upload's id, or out of the project listing in a
+  second tab, and downloads it, without submitting again. Text-to-video and character-only
+  r2v runs upload nothing unique, so they still exit 9 (`retryable: false`).
+
+- **Reference-to-video with a character now runs on flow.google.com**
+  ([#723](https://github.com/ffroliva/gflow-cli/issues/723)). Local-file `video r2v` with
+  `--reference-entity` paired with `--reference-entity-name` is served on the migrated host:
+  the character is attached through the composer's `@` picker, its chip is verified before
+  the billed click, and the submit body must carry its entity id beside every uploaded
+  image, or the run is refused before Flow acts on it. An MCP r2v whose only reference is a
+  character had no submit-body check at all before. The refusal rested on a null submit reply measured on
+  2026-09-07; on 2026-10-26 an entity-bound r2v run completed end to end through the stock
+  observer. An entity id without a name now exits 36 with that reason instead of failing
+  later on a chip-count mismatch. Text-to-video with a character stays refused (exit 36,
+  [#716](https://github.com/ffroliva/gflow-cli/issues/716)); image-to-video with a character is refused the same way.
+
+- **MCP `wait=false` generations now run**
+  ([#1097](https://github.com/ffroliva/gflow-cli/issues/1097)). Before, `gflow_generate_image`
+  and `gflow_generate_video` with `wait=false` saved the job and returned a `task_id`, but no
+  gflow command ever ran it: `tasks/get` said `working` forever. The job now runs in the
+  background of the server that accepted it, one job at a time per profile within that
+  server, sharing the
+  profile with `wait=true` calls. Once it has finished, `tasks/get` carries the same reply
+  `wait=true` would (files, project id, seed). `tasks/cancel` now stops the job instead of only
+  relabelling its row, and a job cancelled after its submit fired is recorded as
+  `indeterminate` (a credit may be spent), not `failed`; `tasks/get` then answers
+  `cancelled`. When the client closes a stdio
+  server or `gflow serve` stops, running jobs are cancelled and recorded the same way.
+  Jobs queued by older releases are never picked up. See [MCP](docs/MCP.md).
+
+### Changed
+
+- **MCP `tasks/get` and `tasks/cancel` now speak SEP-2663**, the Tasks extension the server
+  declares ([#1102](https://github.com/ffroliva/gflow-cli/issues/1102)). They used the shapes
+  of the older 2025-11-25 tasks spec. `tasks/get` now sends `ttlMs` (null: rows do not
+  expire) instead of `ttl: 3600`, and carries the finished tool result in a `result` field. A
+  generation that failed now reads `completed` with `result.isError: true` instead of
+  `failed`, because SEP-2663 keeps `failed` for protocol errors: **check `isError`**.
+  `tasks/cancel` answers with an empty acknowledgement instead of a task; read the outcome
+  from `tasks/get`. There is no `tasks/result`; the server answers it `-32601`.
+
+- **Dependencies:** `pydantic-settings` 2.16.0 → 2.16.1, `platformdirs` 4.13.3 → 4.13.5,
+  `fastapi` 0.143.2 → 0.161.1, and the dev tool `ruff` 0.17.1 → 0.17.2
+  ([#1104](https://github.com/ffroliva/gflow-cli/pull/1104)).
+
+### Security
+
+- **The agent-only composer reads a credit confirmation before approving it**
+  ([#988](https://github.com/ffroliva/gflow-cli/issues/988)). On an account Flow serves the
+  agent-only composer, one confirmation can bill several generations, and gflow used to
+  approve the first one without reading it, so an agent that queued too much was caught only
+  after the credits were spent. gflow now reads the numbers in the confirmation's title and
+  **rejects** one that quotes more than requested (exit 25, nothing approved). A video
+  confirmation whose count cannot be read is not approved either. This matters most over MCP,
+  where the prompt may come from an untrusted source. Measured on English and Russian titles
+  from a contributor's account; not yet run on a maintainer account, because none is served
+  this composer.
+
 ## [0.90.0] — 2026-10-25
 
 ### Added
@@ -6667,7 +6733,8 @@ shell-script template that branches on these codes.
 
 First skeleton. Not functional end-to-end yet.
 
-[Unreleased]: https://github.com/ffroliva/gflow-cli/compare/v0.90.0...HEAD
+[Unreleased]: https://github.com/ffroliva/gflow-cli/compare/v0.91.0...HEAD
+[0.91.0]: https://github.com/ffroliva/gflow-cli/compare/v0.90.0...v0.91.0
 [0.90.0]: https://github.com/ffroliva/gflow-cli/compare/v0.89.1...v0.90.0
 [0.89.1]: https://github.com/ffroliva/gflow-cli/compare/v0.89.0...v0.89.1
 [0.89.0]: https://github.com/ffroliva/gflow-cli/compare/v0.88.0...v0.89.0

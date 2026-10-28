@@ -67,13 +67,14 @@ uv run python scripts/ci/check_doc_links.py
 uv run python scripts/ci/check_website_docs_pii.py
 uv run python scripts/ci/generate_website_docs.py --check
 uv run python scripts/ci/check_council_memory.py
+uv run python scripts/ci/generate_plugin_skills.py --check
 uv run ruff check src tests
 uv run ruff format --check src tests
 uv run pyright src
 uv run python -m pytest -q --cov=gflow_cli
 ```
 
-CI runs the same nine on every push (this list is kept identical to AGENTS.md's —
+CI runs the same ten on every push (this list is kept identical to AGENTS.md's —
 `/gflow:check` runs it plus the CLI↔MCP mirror sweep). Do not bypass with `--no-verify`.
 Project pytest defaults exclude `e2e` and `live`; run those credit-spending
 tests only with an explicit marker expression and profile/env setup.

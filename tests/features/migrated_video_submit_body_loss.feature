@@ -9,3 +9,16 @@ Feature: A video whose submit reply body is lost is reported as possibly billed
     When gflow generates a lite clip on the migrated host
     Then exactly one video submit reached Flow
     And gflow reports a timeout that is not retryable and says to check the project
+
+  # #1112: a run that uploaded a file is followed to its clip. The first status poll
+  # after the loss names the clip by the id this run uploaded (spike 2026-10-27).
+  Scenario Outline: An r2v clip whose submit reply body is lost is still delivered, through <surface>
+    Given a video submit whose reply body Chrome cannot return
+    When <surface> generates an r2v clip from a local reference image
+    Then exactly one video submit reply reached gflow
+    And the clip is on disk
+
+    Examples:
+      | surface            |
+      | the CLI            |
+      | the MCP video tool |

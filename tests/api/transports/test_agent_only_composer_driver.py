@@ -53,7 +53,7 @@ FIXTURE = r"""
 <script>
 const S = Object.assign({kind: 'image', gates: 0, produce: 1, delay: 120, idle: false,
   staleGate: false, preMedia: false, dupe: false, posterOnly: false}, window.SCENARIO || {});
-window.log = {submitted: null, approvals: 0, saves: []};
+window.log = {submitted: null, approvals: 0, rejections: 0, approvedTitles: [], saves: []};
 const state = {groups: [0, 1, 0, 0],
   models: {image: '\u{1F34C} Nano Banana 2', video: 'Omni 1.1 Flash'}, confirm: 0};
 const LIGS = [['crop_16_9', 'crop_landscape', 'crop_square', 'crop_portrait', 'crop_9_16'],
@@ -113,15 +113,27 @@ function videoTile(n) {
     }
   }, S.delay * 2);
 }
-function gate() {
+// Measured title (#988, en): count first, credits last. `titleLag` renders it late.
+function gateTitle(quoted) {
+  return S.gateTitle !== undefined ? S.gateTitle
+    : `Would you like me to kick off this ${quoted || S.quoted || 1} video generation, costing 10 credits?`;
+}
+function gate(quoted) {
   const m = document.createElement('flow-permission-message');
-  m.innerHTML = '<div role="radiogroup">' + ['check', 'check', 'close'].map(l =>
+  m.innerHTML = '<p class="title"></p><div role="radiogroup">' + ['check', 'check', 'close'].map(l =>
     `<div role="radio" class="option-row"><mat-icon>${l}</mat-icon></div>`).join('') + '</div>';
-  m.querySelector('.option-row').onclick = () => {
-    m.querySelectorAll('.option-row').forEach(r => r.classList.add('read-only'));
+  const title = m.querySelector('p.title');
+  if (S.titleLag) setTimeout(() => { title.textContent = gateTitle(quoted); }, S.titleLag);
+  else title.textContent = gateTitle(quoted);
+  const rows = m.querySelectorAll('.option-row');
+  const answer = () => rows.forEach(r => r.classList.add('read-only'));
+  rows[0].onclick = () => {
+    window.log.approvedTitles.push(title.textContent);
+    answer();
     window.log.approvals++;
     if (window.log.approvals < S.gates) setTimeout(gate, S.delay); else produce();
   };
+  rows[2].onclick = () => { answer(); window.log.rejections++; };
   document.getElementById('chat').appendChild(m);
 }
 function produce() {
@@ -148,7 +160,7 @@ function submit() {
       if (S.reply) document.getElementById('chat').insertAdjacentHTML('beforeend', `<flow-chat-bubble>${S.reply}</flow-chat-bubble>`);
       return;
     }
-    if (S.gates > 0) { setSubmit(false); gate(); return; }
+    if (S.gates > 0) { setSubmit(false); gate(); if (S.extraGate) gate(S.extraGate); return; }
     produce();
   }, S.delay);
 }
@@ -267,6 +279,68 @@ async def test_a_stale_gate_is_never_approved_and_our_own_gate_is(page: Page) ->
     assert log["submitted"] == "Make me a video"
     stale_rows = page.locator("flow-permission-message").first.locator(".option-row.read-only")
     assert await stale_rows.count() == 0, "the pre-existing gate was clicked"
+
+
+@pytest.mark.asyncio
+async def test_a_gate_quoting_more_clips_than_requested_is_rejected_not_approved(
+    page: Page,
+) -> None:
+    """#988: one gate can bill several clips. Read its count before answering it."""
+    await _load(page, kind="video", gates=1, quoted=2)
+    with pytest.raises(FlowAgentUiError, match="rejected") as exc:
+        await aoc.AgentOnlyComposer().generate(page, "x", kind="video", count=1, budget_s=10)
+    log = await _log(page)
+    assert (log["approvals"], log["rejections"]) == (0, 1)
+    assert is_retryable(exc.value) is False
+    assert exc.value.remediation_hint == aoc._REJECTED_HINT  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_a_gate_title_that_renders_late_is_read_once_complete(page: Page) -> None:
+    """The rows can be live before the title text is in: never approve on a half title."""
+    await _load(page, kind="video", gates=1, titleLag=300)
+    (media,) = await aoc.AgentOnlyComposer().generate(page, "x", kind="video", count=1, budget_s=10)
+    assert "/video/" in media.src
+    log = await _log(page)
+    assert log["approvals"] == 1
+    assert "1 video generation" in log["approvedTitles"][0], "approved before the title rendered"
+
+
+@pytest.mark.asyncio
+async def test_two_gates_at_once_never_approve_the_one_that_was_not_read(page: Page) -> None:
+    """Review of #988: the gate whose count was read is the gate that is approved."""
+    await _load(page, kind="video", gates=1, extraGate=2)
+    with pytest.raises(FlowAgentUiError, match="second") as exc:
+        await aoc.AgentOnlyComposer().generate(page, "x", kind="video", count=1, budget_s=10)
+    assert (await _log(page))["approvals"] == 0
+    _assert_not_retried(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_the_measured_russian_gate_is_approved_for_one_clip(page: Page) -> None:
+    await _load(page, kind="video", gates=1, gateTitle="Сгенерировать 1 видео за бонусы (10)?")
+    await aoc.AgentOnlyComposer().generate(page, "x", kind="video", count=1, budget_s=10)
+    assert (await _log(page))["approvals"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_video_gate_whose_count_cannot_be_read_is_never_approved(page: Page) -> None:
+    """An unmeasured title shape fails closed: nothing is clicked, so nothing is billed."""
+    await _load(page, kind="video", gates=1, gateTitle="Shall I go ahead?")
+    with pytest.raises(FlowAgentUiError, match="could not read") as exc:
+        await aoc.AgentOnlyComposer().generate(page, "x", kind="video", count=1, budget_s=10)
+    log = await _log(page)
+    assert (log["approvals"], log["rejections"]) == (0, 0)
+    assert is_retryable(exc.value) is False
+
+
+@pytest.mark.asyncio
+async def test_an_image_gate_whose_count_cannot_be_read_is_still_approved(page: Page) -> None:
+    """Image gates are unmeasured and cost no credits; the extra-tile check still guards."""
+    await _load(page, kind="image", gates=1, gateTitle="Shall I go ahead?")
+    media = await aoc.AgentOnlyComposer().generate(page, "x", kind="image", count=1, budget_s=10)
+    assert len(media) == 1
+    assert (await _log(page))["approvals"] == 1
 
 
 @pytest.mark.asyncio
@@ -934,6 +1008,7 @@ def _clicks_time_out() -> MagicMock:
     loc.click = AsyncMock(side_effect=PlaywrightTimeoutError("Timeout 5000ms exceeded"))
     loc.last = loc.first = loc
     loc.locator.return_value = loc
+    loc.nth.return_value = loc
     page.locator.return_value = loc
     return page
 
@@ -947,6 +1022,30 @@ async def test_an_approve_click_that_times_out_is_an_after_submit_failure() -> N
 
 
 @pytest.mark.asyncio
+async def test_a_reject_that_does_not_take_keeps_the_after_submit_advice() -> None:
+    """'Nothing was approved' is only said once the gate is seen to turn read-only."""
+    page = _clicks_time_out()
+    assert await aoc.AgentOnlyComposer()._reject_gate(page, 0) is False  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.parametrize(
+    ("title", "count", "expected"),
+    [
+        ("Would you like me to kick off this 1 video generation, costing 10 credits?", 1, False),
+        ("Сгенерировать 1 видео за бонусы (10)?", 1, False),
+        ("Would you like me to kick off these 2 video generations, costing 20 credits?", 1, True),
+        # A digit the prompt put in the title can only make it refuse, never approve.
+        ("Kick off 1 clip of Scene 1 and 3 more, costing 40 credits?", 1, True),
+        ("Would you like me to kick off this 1", 1, None),  # half rendered: no credits yet
+        ("Shall I go ahead?", 1, None),
+        ("", 1, None),
+    ],
+)
+def test_gate_quotes_more(title: str, count: int, expected: bool | None) -> None:
+    assert aoc.gate_quotes_more(title, count) is expected
+
+
+@pytest.mark.asyncio
 async def test_an_approved_gate_that_never_turns_read_only_is_drift() -> None:
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -957,7 +1056,7 @@ async def test_an_approved_gate_that_never_turns_read_only_is_drift() -> None:
     loc.wait_for = AsyncMock(side_effect=PlaywrightTimeoutError("Timeout exceeded"))
     with pytest.raises(UiSelectorDriftError, match="did not turn read-only"):
         await aoc.AgentOnlyComposer()._approve_gate(page, 0)  # pyright: ignore[reportPrivateUsage]
-    loc.nth.assert_called_once_with(0)
+    assert {c.args for c in loc.nth.call_args_list} == {(0,)}  # the gate that was read
     assert loc.wait_for.await_args.kwargs["state"] == "detached"
 
 

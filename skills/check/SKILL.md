@@ -13,7 +13,7 @@ Run in order. Stop and report if a step fails after the fix pass.
 
 These steps mirror the CI `test` job in `.github/workflows/ci.yml` **in the same order**. Any command that CI runs as a *verify* (`--check`) is run here as a verify too — see step 4.
 
-**1. Repo hygiene + doc links + website-docs PII guard** (read-only — CI runs all three; a broken doc link or a private identifier in the published `website/docs/` mirror fails CI)
+**1. Repo hygiene + doc links + website-docs PII guard** (read-only — CI runs every one of them; a broken doc link or a private identifier in the published `website/docs/` mirror fails CI)
 
 ```bash
 PYTHONUTF8=1 uv run python scripts/ci/check_repo_hygiene.py
@@ -21,6 +21,7 @@ PYTHONUTF8=1 uv run python scripts/ci/check_doc_links.py
 PYTHONUTF8=1 uv run python scripts/ci/check_website_docs_pii.py
 PYTHONUTF8=1 uv run python scripts/ci/generate_website_docs.py --check
 PYTHONUTF8=1 uv run python scripts/ci/check_council_memory.py
+PYTHONUTF8=1 uv run python scripts/ci/generate_plugin_skills.py --check
 ```
 
 `generate_website_docs.py --check` fails on either half of the published-site contract:
