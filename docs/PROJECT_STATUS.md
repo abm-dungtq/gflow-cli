@@ -22,8 +22,9 @@ an agent cannot bill more than was asked for under a single approval (#988).
 
 **On flow.google.com.** Local-file `video r2v` attaches a named character with
 `--reference-entity` + `--reference-entity-name`, from the CLI and `gflow_generate_video`
-alike (#723). When Chrome loses the body of a video submit reply, gflow follows the clip it
-uploaded the references for to completion instead of failing a billed generation (#1112).
+alike (#723). When Chrome loses the body of a video submit reply on an r2v or i2v run from
+local files, gflow follows the clip carrying the files it uploaded to completion instead of
+failing a billed generation; t2v and character-only r2v still end in exit 9 (#1112).
 
 Full ledger: [LIVE_VERIFICATION_v0.91.0](LIVE_VERIFICATION_v0.91.0.md).
 

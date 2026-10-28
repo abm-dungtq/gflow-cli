@@ -34,12 +34,15 @@
 | The same over Streamable HTTP (#1102) | `gflow serve` on loopback | ✅ on the release tree: a real `gflow serve`, the SDK's HTTP client in both eras, against a completed task in the real catalog. `tasks/get` → `completed`, `ttlMs: null`, `result.isError: false` with 1 file (plus `resultType: "complete"` in `2026-07-28`); `tasks/result` → `-32601`; `tasks/cancel` → `{}` / `{resultType: "complete"}`. No browser started | $0 |
 | The agent-only credit confirmation is read before approval (#988) | agent-only composer: `image t2i`, `video t2v`, and their MCP twins | ❌ **blocked**: no profile here is served the agent-only composer (spike `2026-10-17-agent-only-cohort-profiles.md`). Offline: driver tests against a fixture of the DOM a contributor captured on en and ru, including over-count, late title, two gates at once and an unreadable title. A $0 run on the contributor's account was requested on #988 / PR #1107 | — |
 | Local-file r2v with a named character on flow.google.com (#723, PR #1109) | `video r2v --reference-entity` + `--reference-entity-name`; MCP `gflow_generate_video` | ✅ `test_migrated_r2v_character_bdd.py` on `ffroliva`, character Pip, head `a50b44ea`: **3 passed** (CLI clip downloaded with the entity attached; MCP the same; an id-only character refused before submit, exit 36, $0). Bound and refused cases are both e2e, CLI and MCP | 24 credits |
-| A lost video submit reply is followed to its clip (#1112, PR #1115) | `video r2v` / `i2v` from local files, CLI and MCP | ✅ `-k` the two r2v rows (checked with `--collect-only` first) on `ffroliva`, head `b292ccc8`: **2 passed** in 137 s. On the MCP row Chrome lost the `MZZa6b` body, gflow adopted the status record carrying its uploaded id in the same second, and the clip reached status 3 and downloaded. The second-tab listing read is offline-only: it never fired live, because the status polls kept running | about 24 credits |
+| A lost video submit reply is followed to its clip (#1112, PR #1115) | `video r2v` from local files, CLI and MCP (i2v: offline only, see below) | ✅ `-k` the two r2v rows (checked with `--collect-only` first) on `ffroliva`, head `b292ccc8`: **2 passed** in 137 s. On the MCP row Chrome lost the `MZZa6b` body, gflow adopted the status record carrying its uploaded id in the same second, and the clip reached status 3 and downloaded. The second-tab listing read is offline-only: it never fired live, because the status polls kept running | about 24 credits |
 | Plugin-skills gate listed in the local routine (#1107) | contributor docs | out of scope: docs only | $0 |
 | Session-hardening lessons (#1103) | docs | out of scope: docs only | $0 |
 
 ## Not verified
 
+- **#1112 on i2v.** Only the two r2v rows ran live. The i2v and start+end (`nprQif`) arms
+  share the same adoption code and are covered by offline tests; a lost reply cannot be
+  forced live, so a paid i2v run would most likely not exercise the path at all.
 - **#988 on a live agent-only account.** This is the external blocker named above. The fix
   fails closed: a video confirmation whose count cannot be read is never approved. Still
   unmeasured: the wording of a confirmation for several clips, and of an image confirmation.
