@@ -73,6 +73,7 @@ from gflow_cli.image_batch import (
     safe_terminal_text,
 )
 from gflow_cli.paths import looks_like_video
+from gflow_cli.services.video_upscale import upscale_downloaded_video
 from gflow_cli.storage import cloud_info_from_path
 
 if TYPE_CHECKING:
@@ -196,6 +197,8 @@ class VideoBatchOutcome:
     error: str | None = None
     exit_code: int = 0
     recovered: bool = False
+    upscaled: str | None = None
+    upscale_warning: str | None = None
 
 
 def _resolve_input_file(raw_path: str, *, label: str, base_dir: Path) -> Path:
@@ -620,6 +623,7 @@ async def _run_one_video_item(
     profile_name: str,
     profile_dir: Path,
     recorder: OperationRecorder | None,
+    upscale: bool = False,
 ) -> tuple[VideoBatchOutcome, BaseException | None]:
     """Run one ``i2v`` item on the shared ``client``.
 
@@ -756,6 +760,12 @@ async def _run_one_video_item(
             bytes=clip.bytes,
         )
 
+    upscale_warning: str | None = None
+    if upscale and result.status.succeeded:
+        result, upscale_warning = await upscale_downloaded_video(
+            client, result, project_id=result.project_id or project_id
+        )
+
     if recorder is not None:
         try:
             cloud_info = (
@@ -801,6 +811,8 @@ async def _run_one_video_item(
             project_id=result.project_id or project_id,
             exit_code=0,
             recovered=recovered,
+            upscaled="1080p" if (upscale and upscale_warning is None) else None,
+            upscale_warning=upscale_warning,
         ),
         None,
     )
@@ -820,6 +832,7 @@ async def run_video_batch(
     resumed: dict[int, VideoBatchOutcome] | None = None,
     jitter_range: tuple[float, float] | None = None,
     client_factory: Callable[..., Any] | None = None,
+    upscale: bool = False,
 ) -> tuple[list[VideoBatchOutcome], str | None]:
     """Run ``videos`` sequentially in ONE :class:`FlowApiClient` session.
 
@@ -851,6 +864,7 @@ async def run_video_batch(
                 resumed=resumed,
                 jitter_range=jitter_range,
                 client_factory=client_factory,
+                upscale=upscale,
             ),
             source="video.batch",
         )
@@ -881,6 +895,7 @@ async def run_video_batch(
                 profile_name=profile_name,
                 profile_dir=profile_dir,
                 recorder=recorder,
+                upscale=upscale,
             )
             outcomes.append(outcome)
             if fatal_exc is not None or (outcome.status == "fail" and not continue_on_error):
@@ -1002,6 +1017,8 @@ def build_video_batch_json_payload(
                 "error": o.error,
                 "exit_code": o.exit_code,
                 **({"recovered": True} if o.recovered else {}),
+                **({"upscaled": o.upscaled} if o.upscaled else {}),
+                **({"upscale_warning": o.upscale_warning} if o.upscale_warning else {}),
             }
             for o in outcomes
         ],

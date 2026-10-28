@@ -414,6 +414,20 @@ class FlowWorker:
 
                                 result = replace(result, local_path=output_file)
 
+                        # The queue has no result column, so the upscale outcome rides in
+                        # error_json of a *completed* task; task_payload reads only these
+                        # two keys from it, and success is decided by status alone.
+                        upscale_meta: dict[str, Any] | None = None
+                        if task.payload.get("upscale", False) and result.status.succeeded:
+                            from gflow_cli.services.video_upscale import upscale_downloaded_video
+
+                            result, warn = await upscale_downloaded_video(
+                                client, result, project_id=project_id
+                            )
+                            upscale_meta = (
+                                {"upscale_warning": warn} if warn else {"upscaled": "1080p"}
+                            )
+
                     try:
                         recorder.record_completed_video(
                             profile_name=self.profile_name,
@@ -447,6 +461,7 @@ class FlowWorker:
                     task.task_id,
                     status="completed",
                     flow_media_id=flow_media_id,
+                    error=upscale_meta,
                 )
                 logger.info(
                     "Task completed successfully", task_id=task.task_id, flow_media_id=flow_media_id

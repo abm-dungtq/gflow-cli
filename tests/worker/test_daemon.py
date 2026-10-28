@@ -1078,3 +1078,84 @@ async def test_a_mint_failure_reaches_an_mcp_caller_as_problem_details(
     assert not error["detail"].startswith("sha256:")
     assert "Execution context was destroyed" in error["detail"]
     assert error["retryable"] is True
+
+
+@pytest.mark.asyncio
+async def test_worker_video_upscale_true_calls_helper_and_surfaces_in_task_payload(
+    temp_db: DataStore, tmp_path: Path
+) -> None:
+    from gflow_cli.mcp.tools import _build_video_payload, task_payload
+
+    clip = tmp_path / "worker_vid.mp4"
+    clip.write_bytes(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"7" * 32)
+    repo = QueueRepository(temp_db)
+    payload = _build_video_payload(
+        prompt="a dragon",
+        mode="t2v",
+        aspect="16:9",
+        count=1,
+        model=None,
+        duration=None,
+        resolution=None,
+        tool_specs=(),
+        project="proj-w-1",
+        project_name=None,
+        upscale=True,
+    )
+    assert payload["upscale"] is True
+    task = repo.enqueue_task(
+        task_id="task-upscale-true",
+        profile_name="default",
+        task_type="t2v",
+        payload=payload,
+    )
+
+    worker = FlowWorker("default", str(temp_db.path))
+    fake_client = FakeFlowApiClient()
+    fake_client.generate_video.return_value = VideoResult(
+        status=VideoStatus(media_id="media-up-w1", status="MEDIA_GENERATION_STATUS_SUCCESSFUL"),
+        local_path=clip,
+        project_id="proj-w-1",
+    )
+
+    async def _fake_upsample(*, out_path: Path, **_kw: object) -> Path:
+        out_path.write_bytes(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"H" * 64)
+        return out_path
+
+    fake_client.upsample_video = AsyncMock(side_effect=_fake_upsample)
+
+    with patch("gflow_cli.worker.daemon.FlowApiClient", return_value=fake_client):
+        await worker.process_task(task)
+    worker.close()
+
+    fake_client.upsample_video.assert_awaited_once()
+    assert clip.read_bytes().endswith(b"H" * 64)
+    assert temp_db.path is not None
+    reply = task_payload("default", "task-upscale-true", temp_db.path)
+    assert reply["status"] == "completed"
+    assert reply["upscaled"] == "1080p"
+
+
+@pytest.mark.asyncio
+async def test_worker_video_default_upscale_false_does_not_call_upsample(
+    temp_db: DataStore,
+) -> None:
+    repo = QueueRepository(temp_db)
+    task = repo.enqueue_task(
+        task_id="task-upscale-false",
+        profile_name="default",
+        task_type="t2v",
+        payload={"prompt": "a dragon", "aspect": "16:9"},
+    )
+    worker = FlowWorker("default", str(temp_db.path))
+    fake_client = FakeFlowApiClient()
+    fake_client.generate_video.return_value = _completed_video_result("media-no-up")
+    fake_client.upsample_video = AsyncMock()
+
+    with patch("gflow_cli.worker.daemon.FlowApiClient", return_value=fake_client):
+        await worker.process_task(task)
+    worker.close()
+
+    fake_client.upsample_video.assert_not_awaited()
+    updated = repo.get_task("task-upscale-false")
+    assert updated is not None and updated.error is None

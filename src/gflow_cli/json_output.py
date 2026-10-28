@@ -184,6 +184,8 @@ def video_result(
     command: str,
     request: GenerateVideoRequest,
     result: VideoResult,
+    upscaled: str | None = None,
+    upscale_warning: str | None = None,
 ) -> dict[str, Any]:
     """Complete result for a ``video t2v`` / ``i2v`` / ``r2v`` run.
 
@@ -211,4 +213,6 @@ def video_result(
             "count": request.count,
             "seed": request.seed,
         },
+        **({"upscaled": upscaled} if upscaled is not None else {}),
+        **({"upscale_warning": upscale_warning} if upscale_warning is not None else {}),
     }

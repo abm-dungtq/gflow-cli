@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--upscale` post-download 1080p export on `gflow video t2v`, `i2v`, `r2v`, `batch`, and MCP `gflow_generate_video(upscale=True)`**.
+  After a 720p video finishes generating and downloading, passing `--upscale` (or `upscale=True` on
+  `gflow_generate_video`) calls `client.upsample_video(..., scale="1080p")` in the same browser
+  session (spending no additional credits) to export the 1080p MP4 to a sibling `.1080p.mp4` temp
+  file and atomically replace the 720p file in place (`os.replace`), then navigates the browser back
+  to the project editor (`/fx/tools/flow/project/<project_id>`). If the 1080p export fails, the
+  original 720p clip is preserved on disk, any temp file is removed, the command/row still succeeds
+  (`status: "ok"`, exit code `0`, no re-submission), and an `upscale_warning` with a
+  `gflow video upscale <media_id> --scale 1080p --project <project_id>` retry command is emitted;
+  when successful, `--json` and MCP task payloads include `"upscaled": "1080p"`.
 - **Local reference image aliases (`--ref name=path` and `{"name", "path"}` in `gflow run`)**.
   `gflow image i2i --ref <name>=<path>` (when `<name>` matches `^[\w-]+$` and `<path>` is an
   existing file) and `gflow run --config` (`ref` / `refs[]` entries as `{"name": "...", "path": "..."}`)

@@ -463,6 +463,7 @@ def task_payload(profile: str, task_id: str, db_path: Path) -> dict[str, Any]:
         file_count=len(file_paths),
     )
 
+    extra = completed_task.error if isinstance(completed_task.error, dict) else {}
     return {
         "status": "completed",
         "task_id": task_id,
@@ -471,6 +472,7 @@ def task_payload(profile: str, task_id: str, db_path: Path) -> dict[str, Any]:
         "flow_workflow_id": flow_workflow_id,
         "seed": seed,
         "files": file_paths,
+        **({k: extra[k] for k in ("upscaled", "upscale_warning") if k in extra}),
     }
 
 
@@ -1063,6 +1065,7 @@ def _build_video_payload(
     ui_mode: str | None = None,
     reference_entities: list[str] | None = None,
     reference_entity_names: list[str] | None = None,
+    upscale: bool = False,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "prompt": prompt,
@@ -1086,6 +1089,8 @@ def _build_video_payload(
         payload["project_name"] = project_name
     if output is not None:
         payload["output_file"] = output
+    if upscale:
+        payload["upscale"] = True
     # Omitted rather than written empty when unused: `codec.build_video_request`
     # already reads both keys, so an empty list is a real (and wrong) instruction.
     if reference_entities:
@@ -1131,6 +1136,7 @@ async def gflow_generate_video(  # NOSONAR
     project_name: str | None = None,
     ui_mode: str | None = None,
     output: str | None = None,
+    upscale: bool = False,
     wait: _WaitParam = True,
 ) -> dict[str, Any]:
     """Generate a video via Google Flow's Veo.
@@ -1217,6 +1223,9 @@ async def gflow_generate_video(  # NOSONAR
             'classic'.
         wait: Block until the generation finishes (default) or run it in the background;
             agents read it from the tool schema (#481).
+        upscale: After download, replace the 720p clip with Flow's free 1080p export
+            (mirrors the CLI ``--upscale``). If the export fails, the 720p clip is kept
+            and ``upscale_warning`` is returned.
         **kwargs: Additional optional keyword arguments such as ``project_name``.
 
     Returns:
@@ -1342,6 +1351,7 @@ async def gflow_generate_video(  # NOSONAR
         ui_mode=ui_mode,
         reference_entities=reference_entities,
         reference_entity_names=reference_entity_names,
+        upscale=upscale,
     )
     payload.update(media)
 
@@ -1365,6 +1375,7 @@ async def gflow_generate_video(  # NOSONAR
         "duration": duration,
         "resolution": resolution,
         "count": count,
+        "upscale": upscale,
         "tools": tools or [],
         "tool_specs": list(tool_specs),
         "profile": resolved_profile,

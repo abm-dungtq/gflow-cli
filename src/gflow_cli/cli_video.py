@@ -46,6 +46,7 @@ from gflow_cli.data.repository import DataRepository, verified_local_path
 from gflow_cli.data.store import DataStore
 from gflow_cli.errors import ConfigurationError, DataStoreError, FlowApiError, GFlowError
 from gflow_cli.image_batch import resolve_jitter_range
+from gflow_cli.services.video_upscale import upscale_downloaded_video
 from gflow_cli.storage import cloud_info_from_path, refuse_cloud_storage_for_local_file
 
 if TYPE_CHECKING:
@@ -98,6 +99,12 @@ _resolution_option = click.option(
         "the labs editor, the run stops before submit (exit 11), with no credits spent."
     ),
 )
+_upscale_option = click.option(
+    "--upscale",
+    is_flag=True,
+    default=False,
+    help="After download, replace the 720p clip with Flow's free 1080p export (no extra credits).",
+)
 
 
 def _warn_persistence_failed_after_success(
@@ -148,6 +155,7 @@ def _shared_gen_tail_options(f: Any) -> Any:
                 type=click.Path(dir_okay=False, path_type=Path),
                 help="Explicit output file path for the generated asset.",
             ),
+            _upscale_option,
             click.option(
                 "--json",
                 "as_json",
@@ -279,6 +287,7 @@ async def _generate_and_report(
     project_id: str | None = None,
     project_name: str | None = None,
     tool_specs: tuple[str, ...] = (),
+    upscale: bool = False,
 ) -> None:
     """Drive FlowApiClient for a single GenerateVideoRequest and print the
     result (or fail with a non-zero exit). Shared by t2v, i2v, and r2v.
@@ -359,6 +368,11 @@ async def _generate_and_report(
                 on_started=on_started,
                 **resolver_kw,
             )
+            upscale_warning: str | None = None
+            if upscale and result.status.succeeded:
+                result, upscale_warning = await upscale_downloaded_video(
+                    client, result, project_id=project_id
+                )
 
         result = _relocate_video_output(result, output_file)
 
@@ -396,6 +410,7 @@ async def _generate_and_report(
                     project_id=initial_project_id,
                     project_name=project_name,
                     tool_specs=tool_specs,
+                    upscale=upscale,
                 )
             )
         # #341: persist the failure before re-raising — the STARTED row (if
@@ -415,8 +430,19 @@ async def _generate_and_report(
     finally:
         recorder.close()
 
+    upscaled = (
+        "1080p" if (upscale and result.status.succeeded and upscale_warning is None) else None
+    )
     if as_json:
-        json_output.emit(json_output.video_result(command=command, request=request, result=result))
+        json_output.emit(
+            json_output.video_result(
+                command=command,
+                request=request,
+                result=result,
+                upscaled=upscaled,
+                upscale_warning=upscale_warning,
+            )
+        )
         if not result.status.succeeded:
             raise SystemExit(1)
         return
@@ -431,6 +457,8 @@ async def _generate_and_report(
         raise SystemExit(1)
 
     console.print(f"[bold green]Saved:[/bold green] {result.local_path}")
+    if upscale_warning is not None:
+        Console(stderr=True).print(f"[yellow]Warning:[/yellow] {upscale_warning}")
 
 
 async def _run_t2v(
@@ -454,6 +482,7 @@ async def _run_t2v(
     project_name: str | None = None,
     tool_specs: tuple[str, ...] = (),
     ui_mode: UiMode | None = None,
+    upscale: bool = False,
 ) -> None:
     from gflow_cli.api.video import Aspect, GenerateVideoRequest, Mode, VideoModel
 
@@ -484,6 +513,7 @@ async def _run_t2v(
         project_id=project_id,
         project_name=effective_title,
         tool_specs=tool_specs,
+        upscale=upscale,
     )
 
 
@@ -524,6 +554,7 @@ class _I2VParams:
     reference_entity_names: tuple[str, ...] = ()
     # Requested Flow UI arm (#299); agentic is rejected at the CLI edge.
     ui_mode: UiMode | None = None
+    upscale: bool = False
 
 
 def _media_picker_metadata(
@@ -631,6 +662,7 @@ async def _run_i2v(
         as_json=as_json,
         project_id=project_id,
         project_name=effective_title,
+        upscale=params.upscale,
     )
 
 
@@ -655,6 +687,7 @@ async def _run_r2v(
     project_id: str | None = None,
     project_name: str | None = None,
     tool_specs: tuple[str, ...] = (),
+    upscale: bool = False,
 ) -> None:
     from gflow_cli.api.video import Aspect, GenerateVideoRequest, Mode, VideoModel
 
@@ -685,6 +718,7 @@ async def _run_r2v(
         project_id=project_id,
         project_name=effective_title,
         tool_specs=tool_specs,
+        upscale=upscale,
     )
 
 
@@ -1239,6 +1273,7 @@ def t2v(
     reference_entity_names: tuple[str, ...],
     out_dir: Path | None,
     output_file: Path | None,
+    upscale: bool,
     as_json: bool,
 ) -> None:
     """Generate a video from PROMPT."""
@@ -1268,6 +1303,7 @@ def t2v(
             project_name=project_name,
             tool_specs=tool_specs,
             ui_mode=UiMode(ui_mode) if ui_mode else None,
+            upscale=upscale,
         ),
         cli_command="video t2v",
         as_json=as_json,
@@ -1421,6 +1457,7 @@ def i2v(  # NOSONAR
     project_name: str | None,
     out_dir: Path | None,
     output_file: Path | None,
+    upscale: bool,
     as_json: bool,
 ) -> None:
     """Generate a video from an initial frame + motion PROMPT."""
@@ -1474,6 +1511,7 @@ def i2v(  # NOSONAR
         image_ref_local_sha256=start_local[1] if start_local else "",
         end_frame_ref_local_sha256=end_local[1] if end_local else "",
         ui_mode=UiMode(ui_mode) if ui_mode else None,
+        upscale=upscale,
     )
     run_with_handlers(
         lambda: _run_i2v(
@@ -1571,6 +1609,7 @@ def i2v(  # NOSONAR
     type=click.Path(file_okay=False, path_type=Path),
     help="Directory to save the generated mp4. Defaults to tmp/.",
 )
+@_upscale_option
 @click.option(
     "--json",
     "as_json",
@@ -1593,6 +1632,7 @@ def r2v(
     reference_entity_names: tuple[str, ...],
     output_file: Path | None,
     out_dir: Path | None,
+    upscale: bool,
     as_json: bool,
 ) -> None:
     """Generate a video from reference images (--ref) + PROMPT."""
@@ -1642,6 +1682,7 @@ def r2v(
             project_id=project_id,
             project_name=project_name,
             tool_specs=tool_specs,
+            upscale=upscale,
         ),
         cli_command="video r2v",
         as_json=as_json,
@@ -2644,6 +2685,7 @@ async def _run_video_upscale(
         "defaults to 2.0-5.0s or GFLOW_CLI_JITTER_RANGE)."
     ),
 )
+@_upscale_option
 @click.option(
     "--json",
     "as_json",
@@ -2660,6 +2702,7 @@ def batch(
     continue_on_error: bool,
     resume: bool,
     jitter: str | None,
+    upscale: bool,
     as_json: bool,
 ) -> None:
     """Execute a JSON-described batch of image-to-video generations sequentially."""
@@ -2742,6 +2785,7 @@ def batch(
                 project_id=resolved_project,
                 resumed=resumed_map,
                 jitter_range=jitter_range,
+                upscale=upscale,
             )
         )
     except GFlowError as exc:

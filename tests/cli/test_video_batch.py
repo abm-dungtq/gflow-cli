@@ -403,3 +403,72 @@ class TestVideoBatchExecution:
         assert payload["succeeded"] == 2
         assert payload["failed"] == 1
         assert [r["status"] for r in payload["results"]] == ["ok", "fail", "ok"]
+
+    def test_video_batch_upscale_flag_handles_per_row_failure_and_success_without_resubmit(
+        self, tmp_path: Path
+    ) -> None:
+        from gflow_cli.errors import UpscaleUnavailableError
+
+        frames = [_write_frame(tmp_path / f"u{i}.png") for i in (1, 2)]
+        cfg_path = _write_video_config(
+            tmp_path,
+            {
+                "videos": [
+                    {"start": str(frames[0]), "prompt": "clip 0", "model": "omni-flash"},
+                    {"start": str(frames[1]), "prompt": "clip 1", "model": "omni-flash"},
+                ]
+            },
+        )
+        fake_client = _make_fake_video_client(tmp_path)
+        fake_client.page = MagicMock()
+        fake_client.page.goto = AsyncMock()
+
+        async def _fake_upsample(
+            *, media_id: str, project_id: str, scale: str, out_path: Path
+        ) -> Path:
+            assert scale == "1080p"
+            assert project_id == "proj-video-batch"
+            if media_id == "vid-media-0":
+                raise UpscaleUnavailableError("row 0 upscale timed out")
+            out_path.write_bytes(_VALID_MP4 + b"1080P")
+            return out_path
+
+        fake_client.upsample_video = AsyncMock(side_effect=_fake_upsample)
+
+        with (
+            patch("gflow_cli.video_batch.FlowApiClient", return_value=fake_client),
+            patch("gflow_cli.cli_video._resolve_profile", return_value="meo-muop"),
+            patch("gflow_cli.cli_video._make_provider_dir", return_value=tmp_path / "prof"),
+        ):
+            result = CliRunner().invoke(
+                cli_main,
+                [
+                    "video",
+                    "batch",
+                    "--config",
+                    str(cfg_path),
+                    "--jitter",
+                    "0",
+                    "--upscale",
+                    "--json",
+                ],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert fake_client.generate_video.call_count == 2
+        assert fake_client.upsample_video.await_count == 2
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "ok"
+        assert payload["succeeded"] == 2
+        r0, r1 = payload["results"]
+        assert r0["status"] == "ok"
+        assert "upscaled" not in r0
+        assert (
+            "gflow video upscale vid-media-0 --scale 1080p --project proj-video-batch"
+            in r0["upscale_warning"]
+        )
+        assert r1["status"] == "ok"
+        assert r1["upscaled"] == "1080p"
+        assert "upscale_warning" not in r1
+        assert Path(r1["output"]).read_bytes().endswith(b"1080P")

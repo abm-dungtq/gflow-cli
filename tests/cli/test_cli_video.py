@@ -1728,3 +1728,169 @@ def test_output_rejects_an_existing_directory_before_generating(tmp_path: Path, 
 
     assert result.exit_code == 2, result.output
     assert "directory" in result.output.lower(), result.output
+
+
+class TestVideoUpscaleFlag:
+    """`--upscale` post-download 1080p export on `t2v`, `i2v`, and `r2v`."""
+
+    @staticmethod
+    def _make_client_factory(
+        clip_path: Path,
+        *,
+        upsample_side_effect: object = None,
+    ) -> tuple[object, AsyncMock]:
+        from gflow_cli.api.video import VideoResult, VideoStatus
+
+        clip_path.write_bytes(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"7" * 32)
+        stub_result = VideoResult(
+            status=VideoStatus(media_id="m-up-1", status="MEDIA_GENERATION_STATUS_SUCCESSFUL"),
+            local_path=clip_path,
+            project_id="proj-up-1",
+        )
+        upsample_mock = AsyncMock()
+        if upsample_side_effect is not None:
+            upsample_mock.side_effect = upsample_side_effect
+        else:
+
+            async def _write_1080p(*, out_path: Path, **_kw: object) -> Path:
+                out_path.write_bytes(
+                    b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"H" * 64
+                )
+                return out_path
+
+            upsample_mock.side_effect = _write_1080p
+
+        class _Client:
+            def __init__(self, **_kw: object) -> None:
+                self.page = None
+                self.upsample_video = upsample_mock
+
+            async def __aenter__(self) -> _Client:
+                return self
+
+            async def __aexit__(self, *_a: object) -> None:
+                return None
+
+            async def create_project(self, **_kw: object) -> object:
+                from types import SimpleNamespace
+
+                return SimpleNamespace(project_id="proj-up-1")
+
+            async def generate_video(self, **_kw: object) -> VideoResult:
+                return stub_result
+
+        return _Client, upsample_mock
+
+    def test_i2v_with_upscale_calls_upsample_and_emits_upscaled_1080p(self, tmp_path: Path) -> None:
+        import json as _json
+
+        from gflow_cli.cli import main
+
+        frame = tmp_path / "hero.png"
+        frame.write_bytes(b"\x89PNG\r\n\x1a\n")
+        clip = tmp_path / "clip.mp4"
+        client_cls, upsample_mock = self._make_client_factory(clip)
+
+        with (
+            patch("gflow_cli.cli_video._resolve_profile", return_value="default"),
+            patch("gflow_cli.cli_video._make_provider_dir", return_value=tmp_path),
+            patch("gflow_cli.cli_video.FlowApiClient", client_cls),
+            patch("gflow_cli.cli_video.OperationRecorder.open", return_value=MagicMock()),
+        ):
+            result = CliRunner().invoke(
+                main,
+                [
+                    "video",
+                    "i2v",
+                    str(frame),
+                    "zoom in",
+                    "--project",
+                    "proj-up-1",
+                    "--upscale",
+                    "--json",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        upsample_mock.assert_awaited_once()
+        assert upsample_mock.call_args.kwargs["scale"] == "1080p"
+        payload = _json.loads(result.stdout)
+        assert payload["status"] == "ok"
+        assert payload["upscaled"] == "1080p"
+        assert "upscale_warning" not in payload
+        assert clip.read_bytes().endswith(b"H" * 64)
+
+    def test_i2v_without_upscale_does_not_call_upsample(self, tmp_path: Path) -> None:
+        import json as _json
+
+        from gflow_cli.cli import main
+
+        frame = tmp_path / "hero.png"
+        frame.write_bytes(b"\x89PNG\r\n\x1a\n")
+        clip = tmp_path / "clip.mp4"
+        client_cls, upsample_mock = self._make_client_factory(clip)
+
+        with (
+            patch("gflow_cli.cli_video._resolve_profile", return_value="default"),
+            patch("gflow_cli.cli_video._make_provider_dir", return_value=tmp_path),
+            patch("gflow_cli.cli_video.FlowApiClient", client_cls),
+            patch("gflow_cli.cli_video.OperationRecorder.open", return_value=MagicMock()),
+        ):
+            result = CliRunner().invoke(
+                main,
+                ["video", "i2v", str(frame), "zoom in", "--project", "proj-up-1", "--json"],
+            )
+
+        assert result.exit_code == 0, result.output
+        upsample_mock.assert_not_awaited()
+        payload = _json.loads(result.stdout)
+        assert payload["status"] == "ok"
+        assert "upscaled" not in payload
+        assert "upscale_warning" not in payload
+
+    def test_i2v_with_upscale_failure_keeps_720p_and_exits_0_with_warning(
+        self, tmp_path: Path
+    ) -> None:
+        import json as _json
+
+        from gflow_cli.cli import main
+        from gflow_cli.errors import UpscaleUnavailableError
+
+        frame = tmp_path / "hero.png"
+        frame.write_bytes(b"\x89PNG\r\n\x1a\n")
+        clip = tmp_path / "clip.mp4"
+        client_cls, upsample_mock = self._make_client_factory(
+            clip,
+            upsample_side_effect=UpscaleUnavailableError("1080p disabled"),
+        )
+
+        with (
+            patch("gflow_cli.cli_video._resolve_profile", return_value="default"),
+            patch("gflow_cli.cli_video._make_provider_dir", return_value=tmp_path),
+            patch("gflow_cli.cli_video.FlowApiClient", client_cls),
+            patch("gflow_cli.cli_video.OperationRecorder.open", return_value=MagicMock()),
+        ):
+            result = CliRunner().invoke(
+                main,
+                [
+                    "video",
+                    "i2v",
+                    str(frame),
+                    "zoom in",
+                    "--project",
+                    "proj-up-1",
+                    "--upscale",
+                    "--json",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        upsample_mock.assert_awaited_once()
+        payload = _json.loads(result.stdout)
+        assert payload["status"] == "ok"
+        assert "upscaled" not in payload
+        assert (
+            "gflow video upscale m-up-1 --scale 1080p --project proj-up-1"
+            in payload["upscale_warning"]
+        )
+        assert clip.read_bytes().endswith(b"7" * 32)

@@ -808,6 +808,8 @@ Options:
                              scratch project (see "Sharing one project across calls").
   -o, --output PATH          Explicit destination file path for the mp4 (parents
                              auto-created; overrides --out-dir).
+  --upscale                  After download, replace the 720p clip with Flow's free
+                             1080p export (no extra credits; keeps 720p on export failure).
 ```
 
 ```bash
@@ -848,6 +850,8 @@ Options:
                             Omit for Flow's default.
   --project ID              Generate in this EXISTING Flow project instead of a scratch
                             project (see "Sharing one project across calls").
+  --upscale                 After download, replace the 720p clip with Flow's free 1080p
+                            export (no extra credits; keeps 720p on export failure).
 ```
 
 ```bash
@@ -966,6 +970,7 @@ gflow video batch --config videos.json --fail-fast --jitter 3.0-6.0 --json
 - **Single browser session:** Chrome opens once for the entire batch and reuses one Flow project across all rows. If `--resume` finds that every row's target `.mp4` already exists and is a valid video container on disk, `gflow video batch` exits `0` immediately without launching a browser.
 - **No automatic retry on submitted video rows:** To avoid double-spending credits or duplicating clips, a submitted video row is never automatically retried. Re-run with `--resume` to skip already-downloaded `.mp4` files and run only the remaining rows.
 - **Automatic stranded-clip recovery (`WireFormatError` / `MediaDownloadError` with `media_id`):** When a row has already started and billed a `media_id` (`on_started`) but fails during the post-generation signed-URL wait or download (`WireFormatError` exit 7 or `MediaDownloadError` exit 8), `gflow video batch` calls `recover_clip` once on the same browser session to retrieve the finished clip from its per-clip route (`/project/<id>/edit/<media-id>`) at zero credit cost, then navigates back to `/project/<id>` for the next row. A recovered row is saved to its target `output`, recorded in the catalog, and marked `"status": "ok"`, `"exit_code": 0`, `"recovered": true` in `--json` output (normal rows omit `"recovered"`). If recovery fails, the row keeps its original error and exit code and appends a `gflow data download <media_id>` hint.
+- **Optional 1080p post-download export (`--upscale`):** Pass `--upscale` on `video t2v`, `i2v`, `r2v`, or `batch` to replace each downloaded 720p `.mp4` in place with Flow's free 1080p export (via `upsample_video`, then returning the page to `/fx/tools/flow/project/<id>` before the next row). On success, `--json` output includes `"upscaled": "1080p"`; if the 1080p export fails, the already-downloaded 720p file is kept, the row remains `"status": "ok"` (exit `0`, never re-submitted), and `"upscale_warning"` carries a `gflow video upscale <media_id> --scale 1080p --project <id>` retry hint.
 - **Fatal session/lane errors always abort immediately:** Authentication errors (`exit 3`), rate limits (`exit 4`), WAF/reCAPTCHA rejection (`exit 10`), profile/config errors (`exit 11`), closed browser session (`exit 15`), database errors (`exit 16`), UI selector drift (`exit 23`), host migration (`exit 36`), and insufficient credits (`exit 37`) stop the batch immediately even under `--continue-on-error` and exit with that error's code. Per-row generation failures (such as content policy refusal) continue to the next row under `--continue-on-error` (default) or stop under `--fail-fast`.
 
 ### Shell loop alternative (for `t2v` / `r2v`)
