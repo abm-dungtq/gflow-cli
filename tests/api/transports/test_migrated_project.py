@@ -470,12 +470,22 @@ class _Context:
 
 
 class _Owner:
-    def __init__(self, probe: _Probe) -> None:
+    def __init__(self, probe: _Probe, *, visibility: str | Exception = "hidden") -> None:
         self.context = _Context(probe)
+        self.visibility = visibility
         self.fronted = False
+        self.front_calls = 0
+        self.probe_closed_before_check = False
+
+    async def evaluate(self, _js: str) -> str:
+        self.probe_closed_before_check = self.context.probe.closed
+        if isinstance(self.visibility, Exception):
+            raise self.visibility
+        return self.visibility
 
     async def bring_to_front(self) -> None:
         self.fronted = True
+        self.front_calls += 1
 
 
 MEDIA = "11111111-2222-4333-8444-555555555555"
@@ -516,6 +526,25 @@ async def test_snapshot_closes_the_probe_when_reading_fails() -> None:
     with pytest.raises(RuntimeError):
         await mc._project_snapshot(owner, PID, upload_name="u.png")  # type: ignore[arg-type]
     assert probe.closed and owner.fronted
+
+
+async def test_snapshot_does_not_bring_to_front_when_composer_tab_is_visible() -> None:
+    probe = _Probe([[{"name": "u.png", "id": MEDIA}]], title="t")
+    owner = _Owner(probe, visibility="visible")
+    await mc._project_snapshot(owner, PID, upload_name="u.png")  # type: ignore[arg-type]
+    assert probe.closed and owner.probe_closed_before_check
+    assert not owner.fronted and owner.front_calls == 0
+
+
+@pytest.mark.parametrize("visibility", ["hidden", RuntimeError("eval failed")])
+async def test_snapshot_brings_to_front_once_when_hidden_or_evaluate_raises(
+    visibility: str | Exception,
+) -> None:
+    probe = _Probe([[{"name": "u.png", "id": MEDIA}]], title="t")
+    owner = _Owner(probe, visibility=visibility)
+    await mc._project_snapshot(owner, PID, upload_name="u.png")  # type: ignore[arg-type]
+    assert probe.closed and owner.probe_closed_before_check
+    assert owner.fronted and owner.front_calls == 1
 
 
 # --- #1037: a create/rename reply that times out after the click ------------------------

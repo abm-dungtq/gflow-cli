@@ -1185,9 +1185,14 @@ class VideoGenerationMixin:
             )
             log.warning(event, media_name=media_name, status_responses_seen=seen_count)
             try:
-                await page.bring_to_front()
-            except Exception as e:
-                log.debug("ui_automation_video.bring_to_front_failed", error=str(e))
+                visibility = await page.evaluate("document.visibilityState")
+            except Exception:  # noqa: BLE001
+                visibility = None
+            if visibility != "visible":
+                try:
+                    await page.bring_to_front()
+                except Exception as e:
+                    log.debug("ui_automation_video.bring_to_front_failed", error=str(e))
             nudged = True
         return seen_count, last_progress, nudged
 

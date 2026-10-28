@@ -980,6 +980,17 @@ def _unreadable_rpc_error(rpcid: str, *, location: str) -> RpcResponseUnavailabl
     )
 
 
+async def _ensure_tab_visible(page: Page) -> None:
+    """Re-front the composer tab only when it is not visible in the browser window."""
+    try:
+        state = await page.evaluate("document.visibilityState")
+    except Exception:  # noqa: BLE001 - fall back to fronting when state is unreadable
+        state = None
+    if state != "visible":
+        await page.bring_to_front()
+        log.debug("migrated.tab_refronted", visibility_state=state)
+
+
 async def _project_snapshot(
     page: Page, project_id: str, *, upload_name: str | None = None
 ) -> tuple[str, list[dict[str, str]]]:
@@ -1025,7 +1036,7 @@ async def _project_snapshot(
         return await field.input_value(), tiles
     finally:
         await probe.close()
-        await page.bring_to_front()  # the composer's typing and `@` picker need focus
+        await _ensure_tab_visible(page)  # backgrounded tabs throttle Angular timers/rAF
 
 
 def _first_uuid(text: str) -> str | None:

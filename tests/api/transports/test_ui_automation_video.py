@@ -214,6 +214,35 @@ class TestPollVideoStatus:
                 page, captured, "m", timeout_s=60.0, poll_interval_s=0.05
             )
 
+    @pytest.mark.asyncio
+    async def test_stall_nudge_skips_bring_to_front_when_tab_is_visible(self) -> None:
+        page = _mock_async_page()
+        page.evaluate = AsyncMock(return_value="visible")
+        _, _, nudged = await VideoGenerationMixin._nudge_tab_if_stalled(
+            page, [], 0, 0.0, False, 10.0, "m"
+        )
+        assert nudged is True
+        page.evaluate.assert_awaited_once_with("document.visibilityState")
+        page.bring_to_front.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("visibility", ["hidden", RuntimeError("eval boom")])
+    async def test_stall_nudge_calls_bring_to_front_once_when_hidden_or_evaluate_raises(
+        self, visibility: str | Exception
+    ) -> None:
+        page = _mock_async_page()
+        page.evaluate = (
+            AsyncMock(side_effect=visibility)
+            if isinstance(visibility, Exception)
+            else AsyncMock(return_value=visibility)
+        )
+        _, _, nudged = await VideoGenerationMixin._nudge_tab_if_stalled(
+            page, [], 0, 0.0, False, 10.0, "m"
+        )
+        assert nudged is True
+        page.evaluate.assert_awaited_once_with("document.visibilityState")
+        page.bring_to_front.assert_awaited_once()
+
 
 def _cascade_page(visible: set[str]) -> MagicMock:
     """A fake page whose locator(sel) is 'visible' only for sel in `visible`."""

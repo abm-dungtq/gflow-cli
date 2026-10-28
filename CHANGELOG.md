@@ -50,6 +50,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The composer tab is re-fronted only when it is actually hidden.**
+  After the project readback probe tab closes (`migrated_composer._project_snapshot`, used when a
+  project's title is checked or an upload/create/rename reply has to be recovered) and in the
+  labs video stall nudge, gflow now reads `document.visibilityState` and calls
+  `page.bring_to_front()` only when the tab is not `"visible"` (or the state cannot be read).
+  `bring_to_front` activates the Chrome window at the OS level on Windows and in `offscreen` mode,
+  taking the user's keyboard focus; measured in an `offscreen` window on macOS, the tab reads
+  `"visible"` after the probe closes, so the call is skipped.
 - **`gflow video batch` now recovers clips that finished generating and billed a `media_id` when the post-render download or 20s signed-URL grace fails.**
   When `client.generate_video` raises `WireFormatError` or `MediaDownloadError` after `on_started`
   has already recorded a `media_id`, `video batch` calls `recover_clip` once on the active browser
