@@ -19,7 +19,10 @@ These are the defaults — overridable per-process via env vars
 
 from __future__ import annotations
 
+import errno
+import os
 import re
+import shutil
 from datetime import date
 from pathlib import Path
 
@@ -276,3 +279,22 @@ def correct_image_extension(path: Path) -> Path:
         return path
     path.rename(target)
     return target
+
+
+def move_file(src: Path, dst: Path) -> None:
+    """Move ``src`` onto ``dst``, replacing it, even when the two are on different volumes.
+
+    ``Path.replace`` is a rename and fails with ``EXDEV`` across filesystems, e.g. a clip
+    downloaded under the working directory on an external disk and ``-o`` on the system
+    disk. Then the bytes are copied next to ``dst`` and swapped in, so ``dst`` is never
+    left half-written.
+    """
+    try:
+        os.replace(src, dst)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        staging = dst.with_name(f".{dst.name}.moving")
+        shutil.copy2(src, staging)
+        os.replace(staging, dst)
+        src.unlink()

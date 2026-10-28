@@ -25,7 +25,7 @@ from gflow_cli.data.repository import DataRepository
 from gflow_cli.data.store import DataStore
 from gflow_cli.errors import DataIntegrityError, DataStoreError, GFlowError
 from gflow_cli.observability import exception_message_hash
-from gflow_cli.paths import image_output_path
+from gflow_cli.paths import image_output_path, move_file
 from gflow_cli.services.reference_uploads import generate_reusing_uploads
 from gflow_cli.storage import cloud_info_from_path
 from gflow_cli.worker import codec
@@ -409,7 +409,7 @@ class FlowWorker:
                             output_file = Path(output_file_val)
                             output_file.parent.mkdir(parents=True, exist_ok=True)
                             if result.local_path != output_file:
-                                result.local_path.replace(output_file)
+                                move_file(result.local_path, output_file)
                                 from dataclasses import replace
 
                                 result = replace(result, local_path=output_file)

@@ -72,7 +72,7 @@ from gflow_cli.image_batch import (
     safe_prompt_preview,
     safe_terminal_text,
 )
-from gflow_cli.paths import looks_like_video
+from gflow_cli.paths import looks_like_video, move_file
 from gflow_cli.services.video_upscale import upscale_downloaded_video
 from gflow_cli.storage import cloud_info_from_path
 
@@ -610,7 +610,7 @@ def _relocate_downloaded_video(result: VideoResult, target: Path) -> VideoResult
         return result
     target.parent.mkdir(parents=True, exist_ok=True)
     if result.local_path.resolve() != target.resolve():
-        result.local_path.replace(target)
+        move_file(result.local_path, target)
     return replace(result, local_path=target)
 
 

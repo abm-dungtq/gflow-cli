@@ -244,11 +244,13 @@ def _relocate_single_video(item: Any, target: Path) -> Any:
     from dataclasses import replace
     from typing import cast
 
+    from gflow_cli.paths import move_file
+
     local_p = cast("Path | None", getattr(item, "local_path", None))
     if local_p is None or not local_p.exists():
         return item
     if local_p != target:
-        local_p.replace(target)
+        move_file(local_p, target)
         return replace(item, local_path=target)
     return item
 

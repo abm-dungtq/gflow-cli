@@ -60,6 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A video saved with `-o` on another disk no longer fails after it was generated.**
+  The clip downloads under the output directory first and was then moved with a rename,
+  which fails with `EXDEV` across filesystems (for example a repository on an external disk
+  and `-o` on the system disk): the command died with an unhandled `OSError` after the credit
+  was spent, leaving the clip in the download folder. `video t2v/i2v/r2v`, `video batch` and
+  the MCP worker now copy across volumes and swap the file in.
 - **The composer tab is re-fronted only when it is actually hidden.**
   After the project readback probe tab closes (`migrated_composer._project_snapshot`, used when a
   project's title is checked or an upload/create/rename reply has to be recovered) and in the
