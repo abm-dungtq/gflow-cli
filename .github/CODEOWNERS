@@ -5,19 +5,19 @@
 # opening PRs — it ensures a maintainer is always in the review loop.
 
 # Global fallback — everything not matched below
-*                       @ffroliva
+*                       @abm-dungtq
 
 # Core source
-/src/                   @ffroliva
+/src/                   @abm-dungtq
 
 # CI and security gates — changes here require extra care
-/.github/               @ffroliva
-/scripts/ci/            @ffroliva
-/.pre-commit-config.yaml @ffroliva
-/.gitleaks.toml         @ffroliva
-/.secrets.baseline      @ffroliva
-/.gitignore             @ffroliva
+/.github/               @abm-dungtq
+/scripts/ci/            @abm-dungtq
+/.pre-commit-config.yaml @abm-dungtq
+/.gitleaks.toml         @abm-dungtq
+/.secrets.baseline      @abm-dungtq
+/.gitignore             @abm-dungtq
 
 # Auth handling — sensitive, never bypass review
-/src/gflow_cli/auth.py  @ffroliva
-/src/gflow_cli/auth/    @ffroliva
+/src/gflow_cli/auth.py  @abm-dungtq
+/src/gflow_cli/auth/    @abm-dungtq

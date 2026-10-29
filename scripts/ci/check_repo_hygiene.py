@@ -98,6 +98,7 @@ ROOT_DOC_ALLOWLIST: frozenset[str] = frozenset(
         "KNOWN_ISSUES.md",
         "PLAN.md",
         "README.md",
+        "README.vi.md",  # Vietnamese translation of the README, linked from its header
         "RELEASE.md",
         "ROADMAP.md",
         "conftest.py",  # root pytest conftest (basetemp + directory-based marker tagging)

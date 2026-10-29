@@ -6,6 +6,7 @@ readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 authors = [{ name = "Flavio Oliva", email = "ffroliva@gmail.com" }]
+maintainers = [{ name = "ABM.DũngTQ" }]
 # PyPI search matches on these, and every downstream catalog copies the summary
 # above verbatim. Both previously described only image-to-video and never
 # mentioned MCP, which is half of what this package is.
@@ -161,11 +162,12 @@ flow = "gflow_cli.cli:main"
 gflow-cli = "gflow_cli.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/ffroliva/gflow-cli"
-Documentation = "https://ffroliva.github.io/gflow-cli/"
-Repository = "https://github.com/ffroliva/gflow-cli"
-Changelog = "https://github.com/ffroliva/gflow-cli/blob/main/CHANGELOG.md"
-Issues = "https://github.com/ffroliva/gflow-cli/issues"
+Homepage = "https://github.com/abm-dungtq/gflow-cli"
+Documentation = "https://github.com/abm-dungtq/gflow-cli#readme"
+Repository = "https://github.com/abm-dungtq/gflow-cli"
+Changelog = "https://github.com/abm-dungtq/gflow-cli/blob/main/CHANGELOG.md"
+Issues = "https://github.com/abm-dungtq/gflow-cli/issues"
+Upstream = "https://github.com/ffroliva/gflow-cli"
 Funding = "https://github.com/sponsors/ffroliva"
 
 [build-system]
