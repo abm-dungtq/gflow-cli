@@ -877,7 +877,10 @@ _ui_mode_option = click.option(
     "--continue-on-error/--fail-fast",
     default=True,
     show_default=True,
-    help="In multi-prompt mode, continue after per-prompt failures or stop at the first failure.",
+    help=(
+        "In multi-prompt mode, continue after per-prompt failures or stop at the first failure."
+        " A WAF 403, rate limit or expired session always stops the batch."
+    ),
 )
 @_jitter_option
 @click.option(
@@ -1622,7 +1625,10 @@ _BATCH_TITLE = "gflow-cli image batch"
     "--continue-on-error/--fail-fast",
     default=True,
     show_default=True,
-    help="Continue after per-prompt failures (default) or stop at the first failure.",
+    help=(
+        "Continue after per-prompt failures (default) or stop at the first failure."
+        " A WAF 403, rate limit or expired session always stops the batch."
+    ),
 )
 @_jitter_option
 @click.option(

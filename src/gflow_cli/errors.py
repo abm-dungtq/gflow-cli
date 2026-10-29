@@ -1562,3 +1562,33 @@ def is_retryable(exc: GFlowError) -> bool:
     if isinstance(override, bool):
         return override
     return isinstance(exc, RETRYABLE_ERRORS)
+
+
+# Fatal session/lane/account errors that MUST halt an entire batch immediately
+# even when --continue-on-error is active. Continuing after these would either
+# spin against a dead browser/session, burn WAF heat, or fail every remaining
+# item identically.
+BATCH_HALT_ERRORS: tuple[type[GFlowError], ...] = (
+    AuthExpiredError,
+    AuthMissingError,
+    RateLimitError,
+    WafRejectionError,
+    ConfigurationError,
+    BrowserSessionClosedError,
+    DataStoreError,
+    ModelModeIncompatibilityError,
+    VideoModelSelectionError,
+    UiSelectorDriftError,
+    BrowserEngineUnavailableError,
+    FlowAgentUiError,
+    UiModeUnavailableError,
+    FlowHostMigratedError,
+    InsufficientCreditsError,
+    FlowAccountChooserError,
+    FlowAccessUnavailableError,
+)
+
+
+def is_batch_halt_error(exc: BaseException) -> bool:
+    """Return True if ``exc`` is a non-retryable session/lane error that stops a batch."""
+    return isinstance(exc, BATCH_HALT_ERRORS)

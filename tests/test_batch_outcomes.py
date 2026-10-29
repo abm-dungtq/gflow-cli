@@ -14,12 +14,21 @@ import pytest
 
 from gflow_cli.api.dto import GeneratedImage, ProjectInfo
 from gflow_cli.api.recaptcha import RecaptchaError
-from gflow_cli.errors import TransportTimeoutError
+from gflow_cli.errors import (
+    AuthExpiredError,
+    ContentPolicyError,
+    GFlowError,
+    RateLimitError,
+    TransportTimeoutError,
+    WafRejectionError,
+)
 from gflow_cli.image_batch import (
     BatchOutcome,
     BatchPromptItem,
     render_image_batch_summary,
     run_image_batch,
+    run_one_image_prompt,
+    run_sequential_batch,
 )
 
 
@@ -185,3 +194,106 @@ def test_a_mint_failure_fails_its_row_and_the_run_continues(tmp_path: Path) -> N
     assert client.generated == ["a", "b", "c"]
     assert [(o.index, o.status) for o in outcomes] == [(0, "fail"), (1, "ok"), (2, "ok")]
     assert "RecaptchaError" in (outcomes[0].error or "")
+
+
+@pytest.mark.parametrize(
+    ("halt_exc", "expected_exit"),
+    [
+        (WafRejectionError("waf blocked"), 10),
+        (RateLimitError("rate limited"), 4),
+        (AuthExpiredError("session expired"), 3),
+    ],
+)
+def test_run_sequential_batch_halts_on_batch_halt_errors_under_continue_on_error(
+    tmp_path: Path,
+    halt_exc: GFlowError,
+    expected_exit: int,
+) -> None:
+    """run_sequential_batch with continue_on_error=True and 4 rows where row 2 (index 1)
+    raises a batch-halt error stops after 2 calls, marks rows 3-4 skipped, and exits with
+    the halting error's exit code."""
+    rows = (_row(0, "p1"), _row(1, "p2"), _row(2, "p3"), _row(3, "p4"))
+    calls: list[str] = []
+
+    class _HaltClient(FakeClient):
+        async def generate_image(self, project_id: str, req: Any) -> GeneratedImage:
+            calls.append(req.prompt)
+            if req.prompt == "p2":
+                raise halt_exc
+            return _img(f"media-{req.prompt}")
+
+    client = _HaltClient(fail_generate=set(), fail_download=set())
+
+    async def _worker(c: Any, pid: str, idx: int, item: BatchPromptItem) -> BatchOutcome:
+        return await run_one_image_prompt(
+            client=c,
+            project_id=pid,
+            idx=idx,
+            item=item,
+            output_dir=tmp_path / "out",
+        )
+
+    outcomes = asyncio.run(
+        run_sequential_batch(
+            profile_dir=tmp_path,
+            headless=True,
+            transport=None,
+            items=rows,
+            continue_on_error=True,
+            project_title="t",
+            worker=_worker,
+            client_factory=lambda **_: client,
+            output_dir=tmp_path / "out",
+            jitter_range=(0, 0),
+        )
+    )
+    assert calls == ["p1", "p2"]
+    assert [o.status for o in outcomes] == ["ok", "fail", "skipped", "skipped"]
+    assert outcomes[1].halt is True
+    assert render_image_batch_summary(outcomes, title="t") == expected_exit
+
+
+def test_run_sequential_batch_continues_on_content_policy_error_under_continue_on_error(
+    tmp_path: Path,
+) -> None:
+    """run_sequential_batch with continue_on_error=True continues past a non-halt error
+    (ContentPolicyError) and submits all 4 rows."""
+    rows = (_row(0, "p1"), _row(1, "p2"), _row(2, "p3"), _row(3, "p4"))
+    calls: list[str] = []
+
+    class _PolicyClient(FakeClient):
+        async def generate_image(self, project_id: str, req: Any) -> GeneratedImage:
+            calls.append(req.prompt)
+            if req.prompt == "p2":
+                raise ContentPolicyError(detail="safety refusal")
+            return _img(f"media-{req.prompt}")
+
+    client = _PolicyClient(fail_generate=set(), fail_download=set())
+
+    async def _worker(c: Any, pid: str, idx: int, item: BatchPromptItem) -> BatchOutcome:
+        return await run_one_image_prompt(
+            client=c,
+            project_id=pid,
+            idx=idx,
+            item=item,
+            output_dir=tmp_path / "out",
+        )
+
+    outcomes = asyncio.run(
+        run_sequential_batch(
+            profile_dir=tmp_path,
+            headless=True,
+            transport=None,
+            items=rows,
+            continue_on_error=True,
+            project_title="t",
+            worker=_worker,
+            client_factory=lambda **_: client,
+            output_dir=tmp_path / "out",
+            jitter_range=(0, 0),
+        )
+    )
+    assert calls == ["p1", "p2", "p3", "p4"]
+    assert [o.status for o in outcomes] == ["ok", "fail", "ok", "ok"]
+    assert outcomes[1].halt is False
+    assert render_image_batch_summary(outcomes, title="t") == 5

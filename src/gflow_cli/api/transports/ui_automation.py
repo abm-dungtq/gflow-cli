@@ -66,6 +66,7 @@ from gflow_cli.errors import (
     UiSelectorDriftError,
     WafRejectionError,
     WireFormatError,
+    is_batch_halt_error,
 )
 from gflow_cli.profile_lease import ProfileLease
 
@@ -3620,7 +3621,11 @@ class UiAutomationTransport(VideoGenerationMixin):
 
             # Fail-fast: break before the next submission so we do not spend
             # credits on prompts the caller will not see in the success path.
-            if result.status == "fail" and not continue_on_error and fatal_err is not None:
+            if (
+                result.status == "fail"
+                and fatal_err is not None
+                and (not continue_on_error or is_batch_halt_error(fatal_err))
+            ):
                 submit_error = fatal_err
                 break
 
@@ -3630,7 +3635,7 @@ class UiAutomationTransport(VideoGenerationMixin):
 
         # Fail-fast: surface partial-results salvage so orchestrator can download
         # already-paid-for images before re-raising.
-        if submit_error is not None and not continue_on_error:
+        if submit_error is not None:
             raise BatchPartialError(
                 detail=f"batch failed at prompt index {len(results)}: {submit_error!s}",
                 route="generate_images_batch",

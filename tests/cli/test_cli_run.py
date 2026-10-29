@@ -23,7 +23,7 @@ from gflow_cli.cli_run import (
     BatchConfig,
     _check_transport_gated,
 )
-from gflow_cli.errors import ConfigurationError, WafRejectionError
+from gflow_cli.errors import ConfigurationError, ContentPolicyError, WafRejectionError
 from gflow_cli.paths import resolve_batch_output_dir
 
 # ---------------------------------------------------------------------------
@@ -312,7 +312,7 @@ class TestGflowRunCommand:
         assert (out / "prompt_2_0.png").exists()
 
     def test_continue_on_error_returns_max_exit_code(self, tmp_path: Path) -> None:
-        """One prompt raises WafRejection (exit 10), others succeed → exit 10."""
+        """One prompt raises ContentPolicyError (exit 5), others succeed → exit 5."""
         cfg_path = _write_config(
             tmp_path,
             {"prompts": [{"text": "p1"}, {"text": "p2"}, {"text": "p3"}]},
@@ -323,7 +323,7 @@ class TestGflowRunCommand:
         async def _gen_with_middle_fail(**_kwargs: Any) -> GeneratedImage:
             call_count["n"] += 1
             if call_count["n"] == 2:
-                raise WafRejectionError("simulated WAF block")
+                raise ContentPolicyError("simulated content policy block")
             return _fake_generated_image(seed=call_count["n"])
 
         fake_client = _patched_client_factory(
@@ -339,8 +339,8 @@ class TestGflowRunCommand:
                 ["run", "--config", str(cfg_path), "--output-dir", str(out)],
                 catch_exceptions=False,
             )
-        # WafRejection → exit code 10.
-        assert result.exit_code == 10
+        # ContentPolicyError → exit code 5.
+        assert result.exit_code == 5
         # All 3 prompts attempted.
         assert fake_client.generate_image.call_count == 3
         # Prompts 1 and 3 wrote files; prompt 2 did not.

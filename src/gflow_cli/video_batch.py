@@ -41,26 +41,12 @@ from gflow_cli.config import get_settings, parse_jitter_range
 from gflow_cli.data.models import OperationKind
 from gflow_cli.data.recorder import OperationRecorder, record_failed_operation_safe
 from gflow_cli.errors import (
-    AuthExpiredError,
-    AuthMissingError,
-    BrowserEngineUnavailableError,
-    BrowserSessionClosedError,
     ConfigurationError,
     DataStoreError,
-    FlowAccessUnavailableError,
-    FlowAccountChooserError,
-    FlowAgentUiError,
-    FlowHostMigratedError,
     GFlowError,
-    InsufficientCreditsError,
     MediaDownloadError,
-    ModelModeIncompatibilityError,
-    RateLimitError,
-    UiModeUnavailableError,
-    UiSelectorDriftError,
-    VideoModelSelectionError,
-    WafRejectionError,
     WireFormatError,
+    is_batch_halt_error,
 )
 from gflow_cli.image_batch import (
     MAX_PROMPT_FILE_BYTES,
@@ -123,34 +109,10 @@ _ALLOWED_VIDEO_ASPECTS: tuple[str, ...] = ("9:16", "16:9")
 _ALLOWED_VIDEO_RESOLUTIONS: frozenset[str] = frozenset({"360p", "720p"})
 DEFAULT_VIDEO_BATCH_MODEL: str = "omni-flash"
 
-# Fatal session/lane/account errors that MUST halt the entire video batch
-# immediately even when --continue-on-error is active. Continuing after these
-# would either spin against a dead browser/session, burn WAF heat, or fail every
-# remaining clip identically.
-_FATAL_VIDEO_BATCH_ERRORS: tuple[type[GFlowError], ...] = (
-    AuthExpiredError,
-    AuthMissingError,
-    RateLimitError,
-    WafRejectionError,
-    ConfigurationError,
-    BrowserSessionClosedError,
-    DataStoreError,
-    ModelModeIncompatibilityError,
-    VideoModelSelectionError,
-    UiSelectorDriftError,
-    BrowserEngineUnavailableError,
-    FlowAgentUiError,
-    UiModeUnavailableError,
-    FlowHostMigratedError,
-    InsufficientCreditsError,
-    FlowAccountChooserError,
-    FlowAccessUnavailableError,
-)
-
 
 def is_fatal_video_batch_error(exc: BaseException) -> bool:
     """Return True if ``exc`` is a non-retryable session/lane error that stops the batch."""
-    return isinstance(exc, _FATAL_VIDEO_BATCH_ERRORS)
+    return is_batch_halt_error(exc)
 
 
 def resolve_video_batch_jitter_range(spec: str | None) -> tuple[float, float]:

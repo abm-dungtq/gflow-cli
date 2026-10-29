@@ -376,8 +376,10 @@ Options:
 - Output names use `prompt_<prompt-index>_<variation-index>.png`.
 - With `-n 4`, each prompt produces four images; the maximum shell shortcut
   fan-out is 50 prompts * 4 = 200 images.
-- `--continue-on-error` is default; `--fail-fast` stops after the first failed
-  prompt.
+- `--continue-on-error` is default (continues past per-prompt errors such as
+  content-policy refusals, while fatal session/account errors like WAF 403,
+  rate limits, or expired auth always halt the batch immediately); `--fail-fast`
+  stops after the first failed prompt of any kind.
 
 **Prompt tools (`-t` / `--tool`).**
 
@@ -641,7 +643,7 @@ All prompts in a batch share one Flow project. The editor is opened once and sta
 
 ### Flags
 
-- `--continue-on-error` / `--fail-fast` — keep going past row failures or stop at the first one (default: `--continue-on-error`, matching the CLI flag default). On fail-fast, already-completed images are downloaded before the error is surfaced.
+- `--continue-on-error` / `--fail-fast` — keep going past per-row failures (such as content-policy refusals) or stop at the first one (default: `--continue-on-error`, matching the CLI flag default). Fatal session/account errors (`WafRejectionError`, `RateLimitError`, `Auth*`, selector drift, closed browser session, etc.) always halt the batch immediately even under `--continue-on-error`. When a batch halts early, already-completed images are downloaded before the error is surfaced.
 - `--jitter SPEC` — anti-bot pause between submissions: `MIN-MAX` seconds (e.g. `10-30`), a single number for `0`–`N`, or `0` to disable. Default `0.5-1.5`; widen if runs hit WAF 403s. `GFLOW_CLI_JITTER_RANGE` overrides the default, the flag beats both.
 
 ### Limits
@@ -1999,7 +2001,7 @@ catalog has not seen yet is recorded without one, as with `t2i --project`).
 
 ### Error semantics
 
-`--continue-on-error` (default): one prompt failing logs the error and continues. Final exit code is the max per-prompt exit code (so a `WafRejectionError` anywhere in the batch makes the whole run exit 10).
+`--continue-on-error` (default): a per-prompt failure (such as `ContentPolicyError`, exit 5) logs the error and continues to subsequent rows, and the final exit code is the max per-prompt exit code. Fatal session/account errors (`BATCH_HALT_ERRORS`: `WafRejectionError` exit 10, `RateLimitError` exit 4, `AuthExpiredError` exit 3, `AuthMissingError` exit 8, closed browser session, selector drift, insufficient credits, etc.) always halt the batch immediately even under `--continue-on-error`, marking remaining prompts as SKIPPED and exiting with the halting error's code.
 
 `--fail-fast`: first failure stops the batch. Remaining prompts are reported as SKIPPED in the summary table.
 

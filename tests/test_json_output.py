@@ -231,3 +231,14 @@ class TestErrorPayload:
         # Non-debug fields stay identical to the default shape.
         assert payload["error"]["class"] == "UnexpectedError"
         assert payload["error"]["exit_code"] == 1
+
+
+def test_batch_partial_error_exits_with_the_halting_errors_code() -> None:
+    """A batch stopped by a WAF 403 exits 10, the WAF code, not the generic 1."""
+    from gflow_cli._cli_helpers import _exit_code_for  # pyright: ignore[reportPrivateUsage]
+    from gflow_cli.errors import BatchPartialError, WafRejectionError
+
+    halted = BatchPartialError("stopped", cause=WafRejectionError("403"))
+    assert json_output.exit_code_for(halted) == 10
+    assert _exit_code_for(halted) == 10
+    assert json_output.exit_code_for(BatchPartialError("no cause")) == 1

@@ -43,6 +43,7 @@ from gflow_cli.errors import (
     GFlowError,
     MediaAttributionError,
     RpcResponseUnavailableError,
+    is_batch_halt_error,
 )
 from gflow_cli.ref_aliases import (
     default_ref_name,
@@ -283,6 +284,7 @@ class BatchOutcome:
     # failed still has its image in the project, and a `batch:N` child references it
     # (#913, SCENARIO #35).
     images: list[GeneratedImage] = field(default_factory=lambda: [])
+    halt: bool = False
 
 
 def resolve_exit_code(exc: GFlowError) -> int:
@@ -727,6 +729,7 @@ async def run_one_image_prompt(
             status="fail",
             error=f"{type(exc).__name__}: {exc}",
             exit_code=resolve_exit_code(exc),
+            halt=is_batch_halt_error(exc),
         )
 
     saved: list[Path] = []
@@ -1036,7 +1039,14 @@ async def run_sequential_batch(
                 await asyncio.sleep(delay)
             outcome = await worker(client, run_project_id, idx, item)
             outcomes.append(outcome)
-            if outcome.status == "fail" and not continue_on_error:
+            if outcome.status == "fail" and (not continue_on_error or outcome.halt):
+                if outcome.halt:
+                    logger.warning(
+                        "batch_halted",
+                        index=outcome.index,
+                        error_class=(outcome.error or "").partition(":")[0],
+                        exit_code=outcome.exit_code,
+                    )
                 for skip_idx in range(idx + 1, len(items)):
                     outcomes.append(
                         BatchOutcome(

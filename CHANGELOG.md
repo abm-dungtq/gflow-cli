@@ -60,6 +60,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Image batches stop at the first sign Google is blocking the account, even under `--continue-on-error`.**
+  `gflow run`, `gflow image batch` and multi-prompt `gflow image t2i` used to keep submitting
+  every remaining row after a WAF 403, a rate limit or an expired session, on an account
+  Google had already flagged. They now share `video batch`'s halt set
+  (`BATCH_HALT_ERRORS` / `is_batch_halt_error()` in `gflow_cli.errors`): the batch logs
+  `batch_halted`, marks the remaining rows skipped without submitting them, and exits with the
+  halting error's code. A per-row failure such as `ContentPolicyError` still continues.
+  A halted manifest batch also exits with that code (10 for a WAF 403) instead of 1, because
+  `BatchPartialError` now takes its exit code from the error that stopped it.
 - **A video saved with `-o` on another disk no longer fails after it was generated.**
   The clip downloads under the output directory first and was then moved with a rename,
   which fails with `EXDEV` across filesystems (for example a repository on an external disk

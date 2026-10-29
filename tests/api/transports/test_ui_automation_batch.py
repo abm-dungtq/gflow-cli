@@ -1252,3 +1252,64 @@ async def test_generate_images_batch_threads_ui_mode(
     mock_get_driver.assert_called_once_with(
         transport._page, ui_mode=UiMode.CLASSIC, transport=transport
     )
+
+
+@pytest.mark.asyncio
+async def test_generate_images_batch_locked_halts_on_waf_error_under_continue_on_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When prompt 1 (idx=0) returns status='fail' with WafRejectionError under
+    continue_on_error=True, _run_one_prompt_in_batch is not called again and the
+    batch raises BatchPartialError wrapping WafRejectionError."""
+    import gflow_cli.api.transports.ui_automation as uia_mod
+    from gflow_cli.api.dto import BatchSubmissionResult
+    from gflow_cli.api.image import Aspect, GenerateImageRequest, Model
+    from gflow_cli.errors import BatchPartialError, WafRejectionError
+
+    transport = UiAutomationTransport.__new__(UiAutomationTransport)
+    transport._setup_done = True
+    transport._page = MagicMock()
+    transport._page.url = "https://labs.google/fx/tools/flow/project/PROJ-WAF"
+    transport._out_dir = None
+    transport._generate_lock = __import__("asyncio").Lock()
+    transport._enter_editor = AsyncMock()
+    transport._dismiss_blocking_overlays = AsyncMock()
+
+    waf_err = WafRejectionError("waf 403 block")
+    transport._run_one_prompt_in_batch = AsyncMock(
+        return_value=(
+            BatchSubmissionResult(
+                status="fail",
+                project_id="PROJ-WAF",
+                prompt_idx=0,
+                prompt_hash="h0",
+                images=(),
+                error=waf_err,
+            ),
+            waf_err,
+        )
+    )
+    monkeypatch.setattr(uia_mod, "_extract_project_id", lambda url: "PROJ-WAF")
+    monkeypatch.setattr(uia_mod.asyncio, "sleep", AsyncMock())
+
+    mock_get_driver = AsyncMock()
+    mock_get_driver.return_value.switch_to_image_mode = AsyncMock()
+
+    prompts = [
+        GenerateImageRequest(prompt="p0", aspect=Aspect.PORTRAIT, model=Model.NARWHAL, count=1),
+        GenerateImageRequest(prompt="p1", aspect=Aspect.PORTRAIT, model=Model.NARWHAL, count=1),
+        GenerateImageRequest(prompt="p2", aspect=Aspect.PORTRAIT, model=Model.NARWHAL, count=1),
+    ]
+
+    with (
+        patch("gflow_cli.api.transports.drivers.factory.get_ui_driver", new=mock_get_driver),
+        pytest.raises(BatchPartialError) as exc_info,
+    ):
+        await transport._generate_images_batch_locked(
+            prompts=prompts,
+            jitter_range=(0.0, 0.0),
+            continue_on_error=True,
+        )
+
+    assert transport._run_one_prompt_in_batch.await_count == 1
+    assert exc_info.value.cause is waf_err

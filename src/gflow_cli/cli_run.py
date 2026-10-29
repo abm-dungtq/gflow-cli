@@ -530,7 +530,8 @@ async def _run_batch(
     show_default=True,
     help=(
         "On per-prompt failure: --continue-on-error attempts the remaining "
-        "prompts (default); --fail-fast halts the batch immediately."
+        "prompts (default); --fail-fast halts the batch immediately. A WAF 403, "
+        "rate limit or expired session always stops the batch."
     ),
 )
 @click.option(

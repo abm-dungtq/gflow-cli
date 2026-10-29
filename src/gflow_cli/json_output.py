@@ -16,7 +16,7 @@ import json
 import traceback
 from typing import TYPE_CHECKING, Any
 
-from gflow_cli.errors import EXIT_CODE_MAP, GFlowError, is_retryable
+from gflow_cli.errors import EXIT_CODE_MAP, BatchPartialError, GFlowError, is_retryable
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -40,7 +40,12 @@ def exit_code_for(exc: GFlowError) -> int:
     ``video chain`` on a :class:`~gflow_cli.errors.ChainPartialError`) can exit
     with the same mapped code the shared handler would have used, without
     re-raising through the handler (which would emit a second JSON document).
+
+    A :class:`~gflow_cli.errors.BatchPartialError` only wraps the error that stopped
+    the batch, so it exits with that error's code (a WAF halt exits 10, not 1).
     """
+    if isinstance(exc, BatchPartialError) and isinstance(exc.cause, GFlowError):
+        return exit_code_for(exc.cause)
     for cls, code in EXIT_CODE_MAP.items():
         if isinstance(exc, cls):
             return code
