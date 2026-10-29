@@ -87,4 +87,8 @@ The first release run (2026-10-26, `develop@7b6b9054`, `denon82`) was 7/7 on the
 
 ## Post-tag evidence
 
-- Filled after the tag is published.
+- Signed tag `v0.91.0` (SSH signature present) on `bc532dc4`, pushed 2026-10-28.
+- `Release` workflow run 40677690426: **success** (`build-and-publish`, `mcp-registry / publish`).
+- PyPI `gflow-cli` reports `0.91.0` as the latest version.
+- GitHub Release: https://github.com/ffroliva/gflow-cli/releases/tag/v0.91.0 (not a prerelease).
+- Release PR #1116 into `main`.
