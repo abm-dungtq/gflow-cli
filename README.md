@@ -1,226 +1,282 @@
 <!-- mcp-name: io.github.ffroliva/gflow-cli -->
 
-# gflow-cli
+# gflow-cli (ABM edition)
 
-> Python CLI and MCP server for Google Flow. Drive [Veo](https://labs.google/fx/tools/flow) (image-to-video, text-to-video) and Imagen (text-to-image) from your terminal: scripted, batched, pipeline-ready.
+**English** · [Tiếng Việt](README.vi.md)
 
-[![PyPI version](https://img.shields.io/pypi/v/gflow-cli.svg)](https://pypi.org/project/gflow-cli/)
-[![CI](https://github.com/ffroliva/gflow-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ffroliva/gflow-cli/actions/workflows/ci.yml)
-[![Release](https://github.com/ffroliva/gflow-cli/actions/workflows/release.yml/badge.svg)](https://github.com/ffroliva/gflow-cli/actions/workflows/release.yml)
-[![Python versions](https://img.shields.io/pypi/pyversions/gflow-cli.svg)](https://pypi.org/project/gflow-cli/)
+Generate images and videos with [Google Flow](https://labs.google/fx/tools/flow) from your terminal. gflow-cli drives Imagen and Nano Banana (images) and Veo / Omni Flash (videos) through your own Flow account, so a whole storyboard can run as one batch command instead of an afternoon of clicking.
+
+This repository is the **ABM edition**: a fork of [ffroliva/gflow-cli](https://github.com/ffroliva/gflow-cli) maintained by **ABM.DũngTQ** for an animation pipeline. It keeps every upstream feature (currently 0.91.0) and adds 1080p downloads, a hidden browser on macOS, safer batches and a video batch runner. The full list is under [What this edition adds](#what-this-edition-adds).
+
+[![Release](https://img.shields.io/github/v/release/abm-dungtq/gflow-cli?include_prereleases&label=release)](https://github.com/abm-dungtq/gflow-cli/releases)
+[![Upstream](https://img.shields.io/badge/upstream-ffroliva%2Fgflow--cli%200.91.0-blue.svg)](https://github.com/ffroliva/gflow-cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](docs/PROJECT_STATUS.md)
-[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Type checked: pyright](https://img.shields.io/badge/type%20checked-pyright-blue.svg)](https://github.com/microsoft/pyright)
-[![Tests: TDD](https://img.shields.io/badge/tests-TDD-brightgreen.svg)](CONTRIBUTING.md)
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=ffroliva_gflow-cli&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=ffroliva_gflow-cli)
-[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=ffroliva_gflow-cli&metric=coverage)](https://sonarcloud.io/component_measures?id=ffroliva_gflow-cli&metric=coverage)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/ffroliva/gflow-cli/badge)](https://scorecard.dev/viewer/?uri=github.com/ffroliva/gflow-cli)
-[![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/ffroliva/gflow-cli)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-lightgrey.svg)
 
-<!-- Gold sponsors appear here: filled by scripts/ci/update_sponsors.py, empty until there is one. -->
+<!-- Gold sponsors of the original project appear here: filled by scripts/ci/update_sponsors.py, empty until there is one. -->
 <!-- sponsors-gold:start -->
 
 <!-- sponsors-gold:end -->
 
-> ⚠️ **Read this before you install.** gflow-cli is **alpha and reverse-engineered — not affiliated with Google**. It drives a headed browser on *your own* Google Flow session, so treat it as your own account risk: automation is subject to Google's ToS, and endpoints or UI can change without notice. It works with **any Google account** that has Flow access, and every generation bills against your account's Flow credit allowance. Read the full [DISCLAIMER](DISCLAIMER.md).
->
-> 🛡️ **"Will this get my account flagged?"** The honest, specific answer — what the tool does to stay unremarkable (headed real Chrome, randomised interaction timing, paced submissions), what it deliberately does **not** do (no proxies, no fingerprint spoofing, no pretending it isn't automation), what you can tune, and what we cannot promise — is in [docs/ACCOUNT_SAFETY.md](docs/ACCOUNT_SAFETY.md).
->
-> 💳 **What failure costs you.** Credits are only spent on Veo *video* generation — images and composition ops are free, so most breakage costs nothing. When Flow's UI drifts mid-run, the CLI fails fast and loudly with distinct exit codes (e.g. selector drift = exit 23) instead of resubmitting, and batch items are recorded locally *before* submission so a broken run never silently burns credits on a stale state. See [KNOWN_ISSUES](KNOWN_ISSUES.md) for the current risk list.
->
-> 🌐 **Headed browser today.** gflow drives Flow through a persistent Playwright Chromium profile, because Google's auth and reCAPTCHA gates require it. The [Architecture](#architecture--current-limitations) section shows where you can help.
+[What it does](#what-it-does) · [What this edition adds](#what-this-edition-adds) · [Setup](#setup) · [Usage](#usage) · [Batches](#batches) · [Hiding the browser](#hiding-the-browser) · [Demo](#demo) · [When something fails](#when-something-fails) · [Documentation](#documentation) · [Author and credits](#author-and-credits)
 
-## Why gflow-cli?
+> ⚠️ **Read this before you install.** gflow-cli is not affiliated with Google. It reverse-engineers Flow and drives a real Chrome window signed in to *your* Google account, so automation happens on your account and under Google's terms. Flow can change its pages at any time. Images are free; Veo video generation spends your Flow credits. Read the [DISCLAIMER](DISCLAIMER.md) and [docs/ACCOUNT_SAFETY.md](docs/ACCOUNT_SAFETY.md).
 
-You have a Google account with Flow access, you have Veo credits, and you run real batch work. gflow-cli gives you:
+## What it does
 
-- **Batch generation.** Loop prompts straight from the shell: `for p in $(cat prompts.txt); do gflow image t2i "$p"; done`. Image batching plus `gflow video t2v` / `i2v` / `r2v` all ship today, and `gflow video extend` continues an existing clip past Flow's 8s ceiling.
-- **Consistent subjects.** `gflow character create` mints a Flow Character (face and body reference) so the same person appears from one generation to the next.
-- **Prompt tools.** `--tool creative-director` rewrites a terse prompt into a vivid one (Google's 5-component formula) before generating — on any command. Bring your own with [My Tools](docs/TOOLS.md).
-- **Pipelines.** Wire Veo into your content automation, AI-video stack, or batch experiments.
-- **Terminal-native.** After one `gflow auth login`, you stay in the shell. No clicking through dialogs. A stale session renews headlessly with `gflow auth renew`.
+| You want to… | Command |
+|---|---|
+| Generate an image from text | `gflow image t2i "a red paper lantern on a wooden table"` |
+| Edit or combine images | `gflow image i2i "same cat, now wearing a scarf" --ref cat.png` |
+| Make a video from text | `gflow video t2v "slow push-in on a forest clearing" --aspect 16:9` |
+| Animate a still image | `gflow video i2v "the lantern sways" --initial-frame lantern.jpg` |
+| Make a video from reference images | `gflow video r2v "..." --ref hero.png --ref room.png` |
+| Get the clip in 1080p | add `--upscale` to `t2v`, `i2v`, `r2v` or `video batch` |
+| Run a whole image storyboard | `gflow run --config storyboard.json` |
+| Run many image-to-video clips in one session | `gflow video batch --config videos.json` |
+| Keep the same character across shots | `gflow character create ...`, then reference it |
+| Extend a clip past 8 seconds | `gflow video extend <media_id> "the camera keeps rising"` |
+| Check your Veo credits | `gflow credits user` |
+| Let an AI agent use Flow | `gflow mcp run` (stdio) or `gflow serve` (HTTP) |
+| Diagnose your setup | `gflow doctor` |
 
-Same Veo and Imagen models, same quality, same billing against your own Google account, now programmatic.
+Every command takes `--profile` to pick a Google account and `--project` to work inside an existing Flow project. Most commands take `--json` for scripts. `gflow docs` prints the bundled documentation offline.
 
-## 60-second quick start
+## What this edition adds
+
+On top of upstream 0.91.0:
+
+- **`--upscale`: keep the 1080p clip.** After a video downloads, Flow's 1080p export (no extra credits) replaces the 720p file at the same path. If the export fails, the 720p clip is kept and the command prints a retry command. Works on `video t2v`, `i2v`, `r2v`, `video batch` and the MCP tool `gflow_generate_video(upscale=True)`.
+- **`gflow video batch`.** Runs 1–50 image-to-video rows from a JSON file in one browser session and one Flow project, with `--resume`, `--jitter` and `--json`. A clip that was generated and billed but failed to download is fetched again for free instead of being lost.
+- **A hidden browser on macOS.** `GFLOW_CLI_WINDOW_MODE=background` runs Chrome as a background-only app: no Dock icon, and it does not take keyboard focus while you work.
+- **Batches stop when Google pushes back.** `gflow run`, `image batch` and multi-prompt `image t2i` stop at the first WAF 403, rate limit or expired session, even with `--continue-on-error`, and exit with that error's code. A flagged account no longer receives the rest of the batch.
+- **Named references in `gflow run`.** Give a reference image a name (`{"name": "cuong", "path": "cuong.png"}`) and write `@cuong` in the prompt. A row can take several references (`refs`) and its own `output` path.
+- **Automatic session renewal.** If the Google session expired before anything was submitted, gflow renews it once and retries. It never retries after a generation was sent. Turn it off with `GFLOW_CLI_AUTO_RENEW=false`.
+- **Fixes.** `-o` on another disk no longer fails after generation. Long image batches re-upload a reference that scrolled out of the project. The Chrome tab is brought forward only when it is actually hidden.
+
+[CHANGELOG.md](CHANGELOG.md) § Unreleased has the details. The headless measurements behind the browser work are in [docs/superpowers/spikes/2026-10-28-headless-generation.md](docs/superpowers/spikes/2026-10-28-headless-generation.md).
+
+## Setup
+
+### Requirements
+
+- A Google account with access to Google Flow. Video generation needs Flow credits.
+- [Google Chrome](https://www.google.com/chrome/) installed normally.
+- [uv](https://docs.astral.sh/uv/getting-started/installation/), which installs Python 3.11+ for you.
+- macOS, Windows or Linux with a desktop. Chrome must be able to open a window for the one-time sign-in.
+
+### 1. Install
 
 ```bash
-# 1 · Install (uv recommended; also: pip install gflow-cli)
-uv tool install gflow-cli
-uv tool run --from gflow-cli playwright install chromium     # one-time, ~150 MB
-# later: `gflow update` upgrades in place (every command shows a banner when a newer release is out)
-
-# 2 · Authenticate (one-time, opens a real Chrome window)
-# Behind a proxy (e.g. Clash)? Set GFLOW_CLI_BROWSER_PROXY=http://127.0.0.1:7897 first (docs/CONFIGURATION.md)
-gflow auth login --browser chrome
-
-# Check the session (spends nothing)
-gflow auth status
-gflow credits user          # Veo credit balance (opens Flow in the browser; spends nothing)
-
-# 3 · Generate
-gflow image t2i "a hot air balloon over Tokyo at sunrise"
-# or:
-gflow video t2v "Slow cinematic push-in on a sunlit forest clearing" --aspect 16:9
-# or mint a reusable Character (face + body reference):
-gflow character create --project <id> --name "Aria" --face-prompt "..." --body-prompt "..."
+uv tool install "git+https://github.com/abm-dungtq/gflow-cli.git@main"
+uvx --from "git+https://github.com/abm-dungtq/gflow-cli.git@main" playwright install chromium
+gflow --version
 ```
 
-Outputs land under `$GFLOW_CLI_OUTPUT_DIR`, or you can route them to S3, MinIO, or Google Cloud Storage with [`GFLOW_CLI_STORAGE_URI`](docs/EXTERNAL_STORAGE.md). The first call takes 30 to 90 seconds while Chromium warms up; later calls reuse the warm session.
+To upgrade later, run the same `uv tool install` command with `--force`. The package on PyPI (`uv tool install gflow-cli`) is upstream and does not include this edition's features.
 
-> **Why `--browser chrome`?** It is the only strategy that marks the profile as a real-Chrome profile, which is what later generation runs open it with. The default `auto` picks it whenever Chrome is installed — see [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md).
+### 2. Sign in once
 
-> **Installing from a local checkout?** `uv tool install <path>` **ignores `uv.lock`** and resolves dependencies from the `pyproject.toml` ranges, so it can hand you a Playwright build this project has never tested. Playwright ships the browser driver, and an untested minor can wedge a generation silently. Carry the locked version explicitly:
->
-> ```bash
-> uv tool install --force --with playwright==1.59.0 .
-> ```
->
-> Installing from PyPI (`uv tool install gflow-cli`) is unaffected — the published range is upper-bounded. Check what you actually have with `uv tool run --from gflow-cli python -c "import importlib.metadata as m; print(m.version('playwright'))"`.
+```bash
+gflow auth login --browser chrome --profile main
+```
 
-For the full 10-minute walkthrough with troubleshooting and multi-account setup, see **[USER_GUIDE: Journey 1](docs/USER_GUIDE.md#journey-1--first-time-setup-10-minutes)**.
+A Chrome window opens. Sign in to Google and wait until the Flow workspace appears; gflow saves the session in its own profile folder. `--browser chrome` matters: generation later reopens the profile as real Chrome. Repeat with another `--profile` name for each Google account.
 
-## Examples
+### 3. Check
 
-One command in, real Flow output back. Left: `gflow image t2i` generating a photorealistic scene in your library. Right: a frame-to-frame transform.
+```bash
+gflow auth status
+gflow credits user --profile main
+gflow doctor
+```
 
-![gflow-cli examples: text-to-image generation, and a before/after frame transform](https://raw.githubusercontent.com/ffroliva/gflow-cli/main/docs/assets/examples.webp)
+None of these spend credits. `gflow doctor` exits 33 when it finds something to fix and tells you what.
+
+### 4. Optional settings
+
+Copy [`.env.template`](.env.template) to `.env` in the folder you run gflow from, or to the gflow home folder for a machine-wide setting. Useful ones:
+
+| Setting | What it does |
+|---|---|
+| `GFLOW_CLI_WINDOW_MODE=background` | macOS: run Chrome hidden, without taking focus |
+| `GFLOW_CLI_OUTPUT_DIR=./out` | Where files go when you do not pass `-o` |
+| `GFLOW_CLI_PROJECT=<id>` | Default Flow project, so runs stop creating new ones |
+| `GFLOW_CLI_JITTER_RANGE=10-30` | Pause between batch submissions; widen it if you see WAF 403s |
+| `GFLOW_CLI_LEASE_WAIT_SECONDS=600` | Wait for a profile another gflow command is using instead of failing |
+
+Every setting is documented in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). Only `.env` is read; a `.env.local` file is ignored.
+
+## Usage
+
+### Images (free)
+
+```bash
+gflow image t2i "a hot air balloon over Tokyo at sunrise" --aspect 16:9 -o out/balloon.png
+gflow image t2i "a cat mom, flat 2D" --model nano2 -n 4 --out out/cats/
+gflow image i2i "the same cockroach, now sitting on a keyboard" --ref refs/cuong.png -o out/k1.png
+```
+
+Models: `nano2` (Nano Banana 2.1, default), `nano2-lite`, `nano-pro`, `imagen4`. Aspect ratios: `16:9`, `4:3`, `1:1`, `3:4`, `9:16`. `-n` makes 1–4 variations.
+
+### Videos (spend credits)
+
+```bash
+gflow video t2v "slow cinematic push-in on a sunlit forest clearing" --aspect 16:9 -o out/forest.mp4
+gflow video i2v "the paper lantern sways gently, slow push in" \
+  --initial-frame out/lantern.jpg --model veo-lite --aspect 16:9 --upscale -o out/lantern.mp4
+gflow video upscale <media_id> --scale 1080p      # 1080p for a clip you already made
+```
+
+Models: `omni-flash`, `veo-lite`, `veo-fast`, `veo-quality`. `--duration` is 4, 6 or 8 seconds; 10 seconds is Omni Flash only. `--end-frame` sets the last frame for `i2v`.
+
+### Projects, characters and catalog
+
+```bash
+gflow project list --profile main          # projects gflow knows about
+gflow character create --project <id> --name "Aria" --face-prompt "..." --body-prompt "..."
+gflow data --help                          # query everything you generated
+```
+
+### For AI agents (MCP)
+
+```bash
+gflow mcp setup          # register the stdio server with your agent
+gflow mcp run --no-spend # a server without the generation tools
+```
+
+The CLI and the MCP server expose the same features. [docs/MCP.md](docs/MCP.md) lists every tool.
+
+## Batches
+
+### An image storyboard: `gflow run`
+
+`storyboard.json`:
+
+```json
+{
+  "prompts": [
+    {"text": "@cuong stands on a desk at night, flat 2D", "aspect_ratio": "16:9",
+     "refs": [{"name": "cuong", "path": "refs/cuong.png"}], "output": "gen/k1.jpg"},
+    {"text": "@cuong jumps onto the keyboard", "aspect_ratio": "16:9",
+     "refs": [{"name": "cuong", "path": "refs/cuong.png"}], "output": "gen/k2.jpg"}
+  ]
+}
+```
+
+```bash
+gflow run --config storyboard.json --profile main --project <id>
+gflow run --config storyboard.json --profile main --project <id> --resume
+```
+
+Each reference file is uploaded once per run. `--resume` skips rows whose output already exists, so a rerun after a failure only makes what is missing.
+
+### Image-to-video in one session: `gflow video batch`
+
+`videos.json`:
+
+```json
+{
+  "project": "<existing-flow-project-id>",
+  "videos": [
+    {"start": "gen/k1.jpg", "prompt": "the cockroach looks around, slow push in",
+     "model": "omni-flash", "duration": 4, "aspect": "16:9", "output": "clips/v1.mp4"},
+    {"start": "gen/k2.jpg", "prompt_file": "prompts/v2.txt",
+     "model": "omni-flash", "duration": 6, "aspect": "16:9", "output": "clips/v2.mp4"}
+  ]
+}
+```
+
+```bash
+gflow video batch --config videos.json --profile main --upscale --json
+```
+
+A submitted row is never sent twice, because a clip Flow accepted may already be billed. If a row fails, rerun with `--resume`.
+
+## Hiding the browser
+
+Google only serves Flow to a real browser, so gflow drives a real Chrome window. How much of it you see depends on the platform:
+
+| Platform | Setting | Result |
+|---|---|---|
+| macOS | `GFLOW_CLI_WINDOW_MODE=background` | Hidden, no Dock icon, never takes focus. Recommended. |
+| macOS, Windows, Linux | `offscreen` (default) | The window opens off-screen, but Chrome takes keyboard focus when it starts. |
+| any | `GFLOW_CLI_HEADLESS=true` | No window at all. Experimental, see below. |
+| any | `normal` | A visible window, useful for watching a run. |
+
+Headless real Chrome generated images 6 out of 6 times on one test account (macOS, 2026-10-28), with no 403 and no reCAPTCHA error. Its user agent says `HeadlessChrome`, and video, Windows and long-term account effects were not measured, so headed Chrome stays the supported default. Try headless on a test account first.
 
 ## Demo
 
-![gflow image t2i runs a single 9:16 prompt, streams structlog output, and writes a PNG to disk](https://raw.githubusercontent.com/ffroliva/gflow-cli/main/docs/assets/example-run.gif)
+![gflow image t2i runs a single 9:16 prompt, streams log output, and writes a PNG](docs/assets/example-run.gif)
 
-A single `gflow image t2i "..." --aspect 9:16 --model nano2` call against a logged-in Flow profile. The terminal streams the run's `structlog` JSON, then lists the written PNG. Chromium drives the Flow editor silently in the background.
+A real two-row `gflow run` on a test account (2026-10-29, about one minute, no credits):
 
-Reproduce the recording with [`scripts/record_demo.ps1`](scripts/record_demo.ps1) (Windows, OBS, ffmpeg, gifski). More formats, including the side-by-side split-screen: **[docs/DEMOS.md](docs/DEMOS.md)**.
+```text
+$ gflow run --config run.json --profile thu-headless --project <project-id> --output-dir tmp/f7/out
+  project: <project-id> (existing)
+                                   gflow run
+┏━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ # ┃ prompt                      ┃ ratio ┃ status ┃ detail                    ┃
+┡━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ 0 │ a small red paper lantern   │ 16:9  │ OK     │ tmp/f7/out/prompt_0_0.jpg │
+│   │ on a wooden table, soft     │       │        │                           │
+│   │ light                       │       │        │                           │
+│ 1 │ a green ceramic teapot on a │ 16:9  │ OK     │ tmp/f7/out/prompt_1_0.jpg │
+│   │ windowsill, morning light   │       │        │                           │
+└───┴─────────────────────────────┴───────┴────────┴───────────────────────────┘
+
+2/2 succeeded · 0 failure(s) · 0 skipped
+```
+
+The first lantern image was then animated with `gflow video i2v --model veo-lite --upscale` on the same account. The result was a 4-second clip at 1920×1080, with `"upscaled": "1080p"` in the JSON output.
+
+![Examples: text-to-image, and a before/after frame transform](docs/assets/examples.webp)
+
+## When something fails
+
+gflow fails loudly with a stable exit code rather than resubmitting, so a broken run does not silently spend credits.
+
+| Exit | Meaning | What to do |
+|---|---|---|
+| 3 / 8 | Session expired or missing | `gflow auth renew`, or `gflow auth login` again |
+| 4 | Rate limited | Wait, then widen `--jitter` |
+| 5 | Refused by content policy | Rephrase that prompt; batches continue past it |
+| 10 | WAF 403: Google blocked the request | Stop and wait. Do not loop retries on this account |
+| 11 | Configuration problem, or the profile is busy | Read the message; it names the field or the lock |
+| 23 | Flow changed its page | `gflow update`, then report it |
+| 37 | Not enough Veo credits | Top up, or use a cheaper model |
+
+Every error is printed as RFC 9457 problem details with a remediation hint. [KNOWN_ISSUES.md](KNOWN_ISSUES.md) lists current problems and workarounds.
 
 ## Documentation
 
-[**docs/INDEX.md**](docs/INDEX.md) is the master routing layer. Quick links:
-
 | Topic | Read |
 |---|---|
-| 🎯 **Getting started** | [User Guide](docs/USER_GUIDE.md) · [Usage](docs/USAGE.md) · [Configuration](docs/CONFIGURATION.md) |
-| **Storage & catalog** | [External Storage](docs/EXTERNAL_STORAGE.md) · [Data Layer](docs/DATA_LAYER.md) |
-| 🎭 **Characters** | [Characters](docs/CHARACTER.md), reusable subjects (`gflow character`) |
-| 🤖 **Agentic & automation** | [Instructions](docs/INSTRUCTIONS.md) (`gflow instructions`, persistent brief cards) · [Movie](docs/MOVIE.md) (`gflow movie`, multi-scene manifests) · [Tools](docs/TOOLS.md) (`--tool`, prompt rewriting) · [MCP server](docs/MCP.md) (`gflow mcp run` / `gflow serve`) |
-| 🔐 **Auth & sessions** | [Authentication](docs/AUTHENTICATION.md) · [Known issues](KNOWN_ISSUES.md) |
-| 📣 **Where to install from** | [Marketplaces](docs/MARKETPLACES.md) (every channel and what each actually delivers) · [Container](docs/CONTAINER.md) (why the image introspects but cannot generate) |
-| 🏗️ **Internals** | [Architecture](docs/ARCHITECTURE.md) · [Security](docs/SECURITY.md) · [Debugging](docs/DEBUGGING.md) |
-| 📦 **Releases** | [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md) · [Release protocol](RELEASE.md) · [Project status](docs/PROJECT_STATUS.md) |
-| 🤝 **Contributing** | [Contributing](CONTRIBUTING.md) · [Development](docs/DEVELOPMENT.md) · [GitHub workflow](docs/GITHUB.md) |
+| Getting started | [User guide](docs/USER_GUIDE.md) · [Usage, every command](docs/USAGE.md) · [Configuration](docs/CONFIGURATION.md) |
+| Accounts | [Authentication](docs/AUTHENTICATION.md) · [Account safety](docs/ACCOUNT_SAFETY.md) · [Known issues](KNOWN_ISSUES.md) |
+| Production | [Characters](docs/CHARACTER.md) · [Movie manifests](docs/MOVIE.md) · [Prompt tools](docs/TOOLS.md) · [Reference strategies](docs/REFERENCE_STRATEGIES.md) |
+| Agents | [MCP server](docs/MCP.md) · [AGENTS.md](AGENTS.md) · [llms.txt](llms.txt) |
+| Internals | [Architecture](docs/ARCHITECTURE.md) · [Development](docs/DEVELOPMENT.md) · [Changelog](CHANGELOG.md) |
 
-## For AI agents & LLMs
+[docs/INDEX.md](docs/INDEX.md) indexes everything.
 
-gflow-cli ships four agent entry points. Pick the one your tool reads first.
+## Support the original project
 
-| File | Audience | Tools |
-|---|---|---|
-| [**AGENTS.md**](AGENTS.md) | Universal coding-agent spec | Cursor · Codex · Aider · Antigravity · Jules · Devin · Windsurf · Zed · Warp · opencode · Copilot |
-| [**CLAUDE.md**](CLAUDE.md) | Claude Code's auto-loaded memory | Claude Code |
-| [**llms.txt**](llms.txt) | LLM-readable summary (llmstxt.org format) | Paste into ChatGPT, Claude, or Gemini to onboard the model |
-| [`skills/gflow-cli/SKILL.md`](skills/gflow-cli/SKILL.md) | Claude Code Skill | Symlink into `~/.claude/skills/` |
-
-### Install the plugin (Claude Code)
-
-One step, and you get the `gflow-cli` and `video-production` skills plus the MCP server:
-
-```
-/plugin marketplace add ffroliva/gflow-cli
-/plugin install gflow@gflow-cli
-```
-
-The plugin ships **disabled**. Claude Code starts a plugin's MCP servers automatically once a
-plugin is enabled, with no prompt of its own — and this server drives your own Google account,
-where Veo video generation bills your credits. So installing it starts nothing, and enabling it
-is a deliberate act. Images and composition are free; only video spends. For a hard guarantee,
-register the server yourself with `gflow mcp run --no-spend`, which never registers the
-credit-spending tools at all. See [docs/MCP.md](docs/MCP.md) for the details, including which
-revision `/plugin marketplace add` gives you.
-
-Codex users: `codex plugin marketplace add .` then `codex plugin add gflow@gflow-cli`.
-
-Onboard any agent in one line. Paste this into your agent of choice:
-
-> *"Read [AGENTS.md](https://github.com/ffroliva/gflow-cli/blob/main/AGENTS.md) and [docs/INDEX.md](https://github.com/ffroliva/gflow-cli/blob/main/docs/INDEX.md), then help me with my Flow batch."*
-
-## Architecture & current limitations
-
-```text
-gflow CLI  →  Provider (interchangeable)  →  Flow (ui_automation) / Mock (tests) / [planned: Official Veo]
-                                              ↓
-                                      Playwright Chromium (headed — login AND generation, by default)
-                                              ↓
-                              aisandbox-pa.googleapis.com  (Google's private Flow API)
-```
-
-**Current transport:** `ui_automation` drives Flow through a persistent Playwright Chromium profile. It is production-stable and verified end-to-end every release (see the per-release `LIVE_VERIFICATION_*` evidence files).
-
-**Two Flow frontends:** Google is moving accounts from `labs.google` onto `flow.google.com` ([#639](https://github.com/ffroliva/gflow-cli/issues/639)) — same product, different widget toolkit and wire protocol (`batchexecute` instead of `aisandbox-pa`). The migrated driver covers text-to-video, image-to-video from a local start frame, reference-to-video from local files, text-to-image, image-to-image from local files, and a single-segment `video extend`. Image generation supports Nano Banana 2.1 (`nano2`, [#958](https://github.com/ffroliva/gflow-cli/issues/958)) / 2 Lite / Pro, the five aspect ratios measured on that host (16:9, 4:3, 1:1, 3:4, 9:16), and counts 1–4; an existing project is required at the transport boundary. Images can tag a character by `@Name`, and reference-to-video takes a named character with `--reference-entity` + `--reference-entity-name` ([#723](https://github.com/ffroliva/gflow-cli/issues/723)). An account served the **agent-only** composer ([#799](https://github.com/ffroliva/gflow-cli/issues/799)) gets text-to-image and text-to-video only. An image `--ref <uuid>` is referenced in place when the catalog records it in the same `--project` ([#995](https://github.com/ffroliva/gflow-cli/issues/995)). Other UUID media references, an entity id without a name, instructions, Imagen 4, and the rest of the matrix keep the labs driver until ported (`GFLOW_CLI_FLOW_HOST`, see [CONFIGURATION](docs/CONFIGURATION.md#gflow_cli_flow_host)).
-
-**What's blocked:** a pure HTTP transport for video generation. The video upload endpoint returns HTTP 401 under non-Chrome browsers plus a reCAPTCHA mint we cannot reproduce headlessly. Three earlier HTTP strategies (`evaluate_fetch`, `bearer`, `sapisidhash`) live under `src/gflow_cli/api/transports/experimental/` for research, off the production path.
-
-**How you can help:** if you have driven `aisandbox-pa.googleapis.com` from outside a real Chrome session, or you understand Google's anti-bot stack here, please open an issue. A working REST transport would unlock serverless deployments, true horizontal concurrency, and roughly 10x the project's reach. Details: [docs/ARCHITECTURE.md § Headed-browser dependency](docs/ARCHITECTURE.md#headed-browser-dependency--current-limitation).
-
-## Project status
-
-**Alpha.** Image (t2i, i2i, upload, upscale, batch) and video (t2v, i2v, r2v, chain, extend, upscale) run end-to-end on `ui_automation`, with a 5-model Veo picker plus `--duration` and `--count`. Beyond single generations: `gflow movie` renders multi-scene manifests, `gflow instructions` manages persistent Agent-Mode brief cards (credits-free), `gflow character` handles reusable subjects, `gflow scene` does credit-free server-side stitching, `--tool` applies prompt-rewriting tools, and an MCP server (`gflow mcp run` stdio / `gflow serve` Streamable HTTP) exposes the core surface to AI agents with a CI-enforced CLI↔MCP parity contract.
-
-Full milestone history lives in [CHANGELOG.md](CHANGELOG.md). Where the project is heading: [ROADMAP.md](ROADMAP.md).
-
-## Support gflow-cli
-
-gflow-cli is built and maintained by one person. Every release is verified against real Google Flow, which spends real AI credits, and breakages get fixed fast because people run it in their pipelines. Sponsorship pays for both.
+gflow-cli is built by one person upstream, and every release there is verified against real Flow with real credits. If this tool saves you time, sponsor the original author:
 
 [![Sponsor $5 one-time](https://img.shields.io/badge/☕_sponsor-$5_one--time-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/ffroliva/sponsorships?frequency=one-time&amount=5)
 [![Sponsor $5 a month](https://img.shields.io/badge/💖_sponsor-$5_a_month-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/ffroliva/sponsorships?frequency=monthly&amount=5)
 
-Relying on gflow-cli at work? The monthly company tiers put your logo here, and Silver and above also get priority issues. All tiers and what each one gets: [docs/SPONSORS.md](docs/SPONSORS.md).
-
-Patched gflow-cli in your fork? Please [open an issue](https://github.com/ffroliva/gflow-cli/issues) or a pull request — a fix that lands upstream helps everyone.
-
-### Hall of fame
+Tiers are listed in [docs/SPONSORS.md](docs/SPONSORS.md).
 
 <!-- sponsors:start -->
 No sponsors yet. <a href="https://github.com/sponsors/ffroliva/sponsorships?frequency=one-time&amp;amount=5">Be the first</a> — every public sponsor is listed here.
 <!-- sponsors:end -->
 
-## License & legal
+## Author and credits
 
-[MIT License](LICENSE) © 2026 Flavio Oliva (`ffroliva`). The MIT license covers `gflow-cli`'s code only. It grants no rights to Flow, Veo model output, or any Google service. Google's own terms (Labs Additional Terms and any plan-specific subscription terms) govern your generations. See the [DISCLAIMER](DISCLAIMER.md).
-
-## Acknowledgements
-
-- [`edge-tts`](https://github.com/rany2/edge-tts), design inspiration for community SDKs over private cloud APIs.
-- [`googleapis/python-genai`](https://github.com/googleapis/python-genai), the official Veo SDK that a future provider release may alias.
-- [Keysight, *Google Labs – Flow AI with Veo3: A Network Traffic Analysis*](https://www.keysight.com/blogs/en/tech/nwvs/2025/08/04/google-flow-ai-har-analysis), an independent capture that helped validate the route patterns.
-
----
-
-## Stats
-
-[![GitHub stars](https://img.shields.io/github/stars/ffroliva/gflow-cli?style=social&cacheSeconds=3600)](https://github.com/ffroliva/gflow-cli/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/ffroliva/gflow-cli?style=social&cacheSeconds=3600)](https://github.com/ffroliva/gflow-cli/network/members)
-[![GitHub watchers](https://img.shields.io/github/watchers/ffroliva/gflow-cli?style=social&cacheSeconds=3600)](https://github.com/ffroliva/gflow-cli/watchers)
-[![GitHub issues](https://img.shields.io/github/issues/ffroliva/gflow-cli?cacheSeconds=3600)](https://github.com/ffroliva/gflow-cli/issues)
-[![GitHub pull requests](https://img.shields.io/github/issues-pr/ffroliva/gflow-cli?cacheSeconds=3600)](https://github.com/ffroliva/gflow-cli/pulls)
-[![GitHub last commit](https://img.shields.io/github/last-commit/ffroliva/gflow-cli?cacheSeconds=3600)](https://github.com/ffroliva/gflow-cli/commits/main)
-[![GitHub repo size](https://img.shields.io/github/repo-size/ffroliva/gflow-cli?cacheSeconds=3600)](https://github.com/ffroliva/gflow-cli)
-[![PyPI downloads](https://static.pepy.tech/badge/gflow-cli/month)](https://pepy.tech/project/gflow-cli)
-
-### Star history
-
-<!-- DO NOT strip `sealed_token` from the URLs below. GitHub restricted the public
-     /stargazers endpoint (2026-06-30), so star-history can only build this chart from a
-     token-authenticated request. Its per-repo cache expires in <3 days, so a tokenless
-     URL renders a "GitHub restricted access to star data" placard — served as HTTP 200,
-     which is why nothing catches it. `.github/workflows/star-history-watch.yml` probes
-     for exactly that. The token is sealed with star-history's key and grants metadata
-     read on a public repo; it is safe in a public README, and they recommend it. -->
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ffroliva/gflow-cli&type=date&theme=dark&legend=top-left&sealed_token=7kTiE_HExjjY2aT7O-_hMxY_Mf6n-ET17mi_RXcRjCSS5rHSBDMd7xFYCzT_yaXhAXrgF8AGTQc6mny_qfuJc7473KGqb-5U41Dpu-tpZIS1IYl-xVQR9ziGJtL0KWQVyWZU1IoUmLWwo43PhgVTo4MJfmWOvluFJq2zlGxE_iLl9wMRgpwQaiC4ufOK" />
-  <img alt="Star history chart for ffroliva/gflow-cli" src="https://api.star-history.com/chart?repos=ffroliva/gflow-cli&type=date&legend=top-left&sealed_token=7kTiE_HExjjY2aT7O-_hMxY_Mf6n-ET17mi_RXcRjCSS5rHSBDMd7xFYCzT_yaXhAXrgF8AGTQc6mny_qfuJc7473KGqb-5U41Dpu-tpZIS1IYl-xVQR9ziGJtL0KWQVyWZU1IoUmLWwo43PhgVTo4MJfmWOvluFJq2zlGxE_iLl9wMRgpwQaiC4ufOK" />
-</picture>
-
-If `gflow-cli` saves you time, please ⭐ the repo. It is the cheapest way to support the project.
+- **ABM edition:** ABM.DũngTQ · 0976202028 · [github.com/abm-dungtq/gflow-cli](https://github.com/abm-dungtq/gflow-cli)
+- **Original project:** [gflow-cli](https://github.com/ffroliva/gflow-cli) by Flavio Oliva (`ffroliva`). The core of this tool is Flavio's work; fixes that apply upstream are worth sending there.
+- **License:** [MIT](LICENSE), © 2026 Flavio Oliva, kept unchanged in this fork. The license covers the code only. Google's own terms govern Flow and everything you generate with it. See the [DISCLAIMER](DISCLAIMER.md).

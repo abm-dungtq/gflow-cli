@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bilingual README for the ABM edition.** `README.md` (English) and the new `README.vi.md`
+  (Vietnamese) describe what the tool does, what this fork adds, setup on macOS / Windows / Linux
+  with an install from the fork's git URL, usage and batch examples, hiding the browser, a real
+  `gflow run` transcript, and the exit codes to act on. Upstream authorship and the MIT license
+  are credited unchanged.
 - **`--upscale` post-download 1080p export on `gflow video t2v`, `i2v`, `r2v`, `batch`, and MCP `gflow_generate_video(upscale=True)`**.
   After a 720p video finishes generating and downloading, passing `--upscale` (or `upscale=True` on
   `gflow_generate_video`) calls `client.upsample_video(..., scale="1080p")` in the same browser
