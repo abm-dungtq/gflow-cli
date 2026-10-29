@@ -551,10 +551,11 @@ class Settings(BaseSettings):
     headless: bool = Field(
         default=False,
         description=(
-            "Run the Playwright Chromium headless. The ui_automation transport "
-            "requires headed Chrome — reCAPTCHA Enterprise rejects headless "
-            "browsers with an immediate 403. Only set True in CI/CD environments "
-            "that use a different transport (e.g. bearer/sapisidhash)."
+            "Run Chrome headless. Headed Chrome stays the default for the "
+            "ui_automation transport: headless real Chrome generated images on "
+            "one account (6/6, docs/superpowers/spikes/2026-10-28-headless-"
+            "generation.md) but advertises HeadlessChrome in its user agent, "
+            "and video, Windows and long-run reCAPTCHA scoring are unmeasured."
         ),
     )
     browser_window_position: str = Field(

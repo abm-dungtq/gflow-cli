@@ -134,7 +134,7 @@ class TestEnvOverrides:
             Settings()
 
     def test_headless_defaults_false(self, clean_env: None) -> None:
-        # ui_automation transport requires headed Chrome — reCAPTCHA rejects headless
+        # ui_automation is supported headed only (headless: 2026-10-28-headless-generation spike)
         assert Settings().headless is False
 
     def test_headless_override_true(self, monkeypatch: pytest.MonkeyPatch) -> None:

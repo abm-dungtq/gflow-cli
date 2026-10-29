@@ -38,10 +38,11 @@ None of this is stealth. It is the difference between "software using a browser"
 and "software that obviously is not a human".
 
 **It drives real, headed Chrome.** The `ui_automation` transport requires headed
-system Chrome (`channel=chrome`). Headless Chromium is rejected by reCAPTCHA
-Enterprise with an immediate 403 regardless of anything else you do, so headless
-is not an option the tool quietly takes — it is a supported setting only for
-transports that never touch the Flow UI. A silent downgrade from real Chrome to
+system Chrome (`channel=chrome`). Headless is not an option the tool quietly
+takes. Headless real Chrome was not rejected outright in a
+[2026-10-28 spike](superpowers/spikes/2026-10-28-headless-generation.md) (images, one
+account), but it advertises `HeadlessChrome` in its user agent and its effect on
+reCAPTCHA scoring over time is unmeasured, so it is not a supported way to generate. A silent downgrade from real Chrome to
 bundled Chromium is treated as a **fatal error**, not a fallback (#222).
 
 **Every interaction delay is randomised.** Individual clicks, panel waits and

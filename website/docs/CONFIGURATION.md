@@ -370,7 +370,7 @@ GFLOW_CLI_HISTORY_PROMPTS=redacted gflow image t2i "confidential brief"
 
 **What:** Run Playwright in headless mode for non-`auth login` commands.
 **Values:** `true` | `false`
-**Default:** `false` — **headed real Chrome is the production default**, not an opt-in fallback. The `ui_automation` transport (gflow-cli's only production transport) requires a headed browser: reCAPTCHA Enterprise rejects headless Chromium with an immediate 403, so `headless=true` is not a WAF workaround — it only exists for CI/CD environments running a non-`ui_automation` transport (e.g. `bearer`/`sapisidhash`, experimental).
+**Default:** `false` — **headed real Chrome is the production default**, not an opt-in fallback. The `ui_automation` transport (gflow-cli's only production transport) is supported headed only. Headless real Chrome is not rejected outright: a [2026-10-28 spike](superpowers/spikes/2026-10-28-headless-generation.md) generated images 6/6 on one account. But its user agent says `HeadlessChrome`, and video, Windows and reCAPTCHA scoring over time were not measured, so `headless=true` is not a WAF workaround and is not recommended for generation.
 **WAF-sensitive runs:** set `GFLOW_CLI_HEADLESS=false` explicitly (it is already the default, but pin it in CI/CD env files or scripts that also set `headless=true` for a different transport, so a transport switch back to `ui_automation` doesn't silently regress to a rejected headless launch).
 
 ### `GFLOW_CLI_BROWSER_WINDOW_POSITION`

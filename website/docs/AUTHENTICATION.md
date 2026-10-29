@@ -42,9 +42,9 @@ This page documents the full lifecycle: capture, storage, reuse, refresh, multi-
                               ┌──────────────────────────────────────┐
                               │  Playwright launches HEADED Chrome   │
                               │  with the same profile dir (the      │
-                              │  production default — reCAPTCHA      │
-                              │  Enterprise rejects headless outright│
-                              │  with a 403); page.request.post(...) │
+                              │  production default — headless is    │
+                              │  unsupported for generation, see     │
+                              │  GFLOW_CLI_HEADLESS); page.request...│
                               │  auto-sends cookies. No token         │
                               │  plumbing needed.                     │
                               └──────────────────────────────────────┘
@@ -559,7 +559,7 @@ For deeper guidance see [SECURITY.md](SECURITY.md).
 ## FAQ
 
 **Q: Can I use `gflow-cli` without a browser at all?**
-A: No — not for `auth login`, and not for generation either. `auth login` needs Chromium so you can solve any 2FA/CAPTCHA challenge interactively. Generation calls also launch a real, **headed** Chrome window by default (`GFLOW_CLI_HEADLESS=false`) — the `ui_automation` transport is gflow-cli's only production transport, and reCAPTCHA Enterprise rejects headless Chromium with an immediate 403, so there is no way to run production generation on a display-less machine without a virtual display (e.g. Xvfb) or a workstation. Plan for that when choosing where to run gflow-cli long-term; see [CONFIGURATION.md § `GFLOW_CLI_HEADLESS`](CONFIGURATION.md#gflow_cli_headless).
+A: No — not for `auth login`, and not for generation either. `auth login` needs Chromium so you can solve any 2FA/CAPTCHA challenge interactively. Generation calls also launch a real, **headed** Chrome window by default (`GFLOW_CLI_HEADLESS=false`) — the `ui_automation` transport is gflow-cli's only production transport and is supported headed only (headless real Chrome generated images in a [2026-10-28 spike](superpowers/spikes/2026-10-28-headless-generation.md), but video and long-run reCAPTCHA scoring are unmeasured), so there is no supported way to run production generation on a display-less machine without a virtual display (e.g. Xvfb) or a workstation. Plan for that when choosing where to run gflow-cli long-term; see [CONFIGURATION.md § `GFLOW_CLI_HEADLESS`](CONFIGURATION.md#gflow_cli_headless).
 
 **Q: Does this support Google Workspace SSO?**
 A: Yes — sign in normally during `auth login`. Whatever your IdP flow looks like in the browser, that's what you'll go through. The captured cookies are the same.

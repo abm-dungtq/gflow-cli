@@ -35,7 +35,7 @@ class TestConstruction:
         assert c.headless is False
 
     def test_default_headless_false(self, tmp_path: Path) -> None:
-        # ui_automation transport requires headed Chrome — reCAPTCHA rejects headless
+        # ui_automation is supported headed only (headless: 2026-10-28-headless-generation spike)
         c = FlowApiClient(profile_dir=tmp_path / "prof")
         assert c.headless is False
 
