@@ -555,6 +555,7 @@ LOST_BODY = "<lost body>"
 class FakeResponse:
     def __init__(self, url: str, text: str, status: int = 200) -> None:
         self.url, self._text, self.status = url, text, status
+        self.request: Any = None
 
     async def text(self) -> str:
         if self._text == LOST_BODY:
@@ -617,15 +618,20 @@ class FakePage:
             asyncio.get_event_loop().create_task(_maybe_await(h(response)))
 
     def _fire_submit(self) -> None:
+        request = None
         if self.scripted_request is not None:
             rpcid, body = self.scripted_request
             # None rpcid: the real nprQif shape — no rpcids query param at all.
             url = _batch_url(rpcid) if rpcid is not None else _batch_bare_url()
+            request = FakeRequest(url, body)
             for h in list(self._handlers["request"]):
-                asyncio.get_event_loop().create_task(_maybe_await(h(FakeRequest(url, body))))
+                asyncio.get_event_loop().create_task(_maybe_await(h(request)))
         for scripted in self.scripted_responses:
             url, text, *rest = scripted
-            self._fire_response(FakeResponse(url, text, *rest))
+            response = FakeResponse(url, text, *rest)
+            # Playwright hands back the same Request object a response answers.
+            response.request = request if request is not None and request.url == url else None
+            self._fire_response(response)
 
     def expect_file_chooser(self, **_: Any) -> FakeChooserContext:
         return FakeChooserContext(self)
@@ -1858,6 +1864,217 @@ async def test_an_unreadable_video_submit_body_is_named_and_not_retryable() -> N
     assert "YhhmEf" in ei.value.detail and "unreadable" in ei.value.detail
     assert not is_retryable(ei.value)
     assert "project" in ei.value.remediation_hint
+
+
+#: #1112: a clip whose run uploaded MEDIA_UP, as a poll lists it after a lost submit.
+WF_OURS = "77777777-7777-4777-8777-777777777777"
+MEDIA_OURS = "88888888-8888-4888-8888-888888888888"
+
+
+def _ours(status: int, url: str | None = None, *, wf: str = WF_OURS) -> list[Any]:
+    rec = _record(status, url)
+    rec[0], rec[2] = wf, MEDIA_OURS if wf == WF_OURS else wf
+    rec[5][6] = [None, [["abra_r2v_8s", 3], [[None, 4, MEDIA_UP]]]]
+    return rec
+
+
+class ListingTab(FakePage):
+    """The second tab the fallback opens: loading the project answers ``listing``."""
+
+    def __init__(self, listing: str | None, *, goto_error: Exception | None = None) -> None:
+        super().__init__()
+        self.listing, self.closed, self.goto_error = listing, False, goto_error
+
+    async def goto(self, url: str, **kw: Any) -> None:
+        await super().goto(url, **kw)
+        if self.goto_error is not None:
+            raise self.goto_error
+        if self.listing is not None:
+            self._fire_response(FakeResponse(_batch_url("Zzl0ze"), self.listing))
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def _observe_lost(
+    responses: list[tuple[str, ...]],
+    *,
+    poll_timeout_s: float = 2.0,
+    tab: ListingTab | None = None,
+) -> tuple[Any, list[Any]]:
+    from types import SimpleNamespace
+
+    from gflow_cli.api.transports.migrated_composer import MigratedComposer
+
+    page = FakePage()
+    page.dom.prompt = "a crane"
+    page.scripted_responses = [(_batch_url("YhhmEf"), LOST_BODY), *responses]
+    tab = tab or ListingTab(None)
+    clicked: list[bool] = []
+    fire = page._fire_submit  # pyright: ignore[reportPrivateUsage]
+
+    def fire_and_note() -> None:
+        clicked.append(True)
+        fire()
+
+    page._fire_submit = fire_and_note  # type: ignore[method-assign]
+
+    async def new_page() -> ListingTab:
+        # Row 9: a second tab open during the upload steals the file chooser's focus,
+        # so it may only open once the submit has been clicked.
+        assert clicked, "the second tab opened before the submit"
+        return tab
+
+    page.context = SimpleNamespace(new_page=new_page)  # type: ignore[attr-defined]
+    started: list[Any] = []
+    rec = await MigratedComposer().submit_and_observe(
+        page,
+        poll_timeout_s=poll_timeout_s,
+        on_started=started.append,
+        project_id=PROJ,
+        adopt_ids=(MEDIA_UP,),
+    )
+    # Row 4: recovery never clicks submit a second time.
+    assert len(clicked) == 1
+    return rec, started
+
+
+async def test_a_lost_submit_reply_adopts_the_clip_carrying_our_upload_1112(
+    install_log_capture: Any,
+) -> None:
+    """Spike 2026-10-27: after a lost MZZa6b body the next poll listed an older clip of the
+    project beside ours. Only ours carries the id this run uploaded."""
+    rec, started = await _observe_lost(
+        [
+            (
+                _batch_url("jwpduf"),
+                _frame("jwpduf", [None, 881, [[_record(3, VIDEO_URL)], [_ours(2)]]]),
+            ),
+            (_batch_url("as29s"), _frame("as29s", _ours(3, VIDEO_URL))),
+        ]
+    )
+    assert rec.workflow_id == WF_OURS and rec.is_done and rec.video_url == VIDEO_URL
+    assert [(s.media_id, s.workflow_id) for s in started] == [(MEDIA_OURS, WF_OURS)]
+    # Row 18: one WARNING line, which the default log level prints to the console.
+    lost = [
+        e for e in install_log_capture.entries if e["event"] == "migrated.video_submit_reply_lost"
+    ]
+    assert (
+        len(lost) == 1 and lost[0]["log_level"] == "warning" and "no re-submit" in lost[0]["note"]
+    )
+    adopted = [e["event"] for e in install_log_capture.entries if "adopted" in e["event"]]
+    assert adopted == ["migrated.video_adopted_from_status"]
+
+
+async def test_an_adopted_clip_that_fails_is_a_failed_generation_not_exit_9_1112() -> None:
+    rec, started = await _observe_lost(
+        [(_batch_url("jwpduf"), _frame("jwpduf", [None, 881, [[_ours(4)]]]))]
+    )
+    assert rec.is_failed and rec.workflow_id == WF_OURS and len(started) == 1
+
+
+async def test_two_clips_carrying_our_upload_are_refused_not_guessed_1112() -> None:
+    from gflow_cli.errors import is_retryable
+
+    other = "99999999-9999-4999-8999-999999999999"
+    with pytest.raises(TransportTimeoutError) as ei:
+        await _observe_lost(
+            [
+                (
+                    _batch_url("jwpduf"),
+                    _frame("jwpduf", [None, 881, [[_ours(2)], [_ours(2, wf=other)]]]),
+                )
+            ]
+        )
+    assert MEDIA_OURS in ei.value.detail and other in ei.value.detail
+    assert not is_retryable(ei.value)
+
+
+async def test_a_lost_reply_with_no_matching_poll_names_the_project_1112() -> None:
+    from gflow_cli.errors import is_retryable
+
+    with pytest.raises(TransportTimeoutError) as ei:
+        await _observe_lost(
+            [(_batch_url("jwpduf"), _frame("jwpduf", [None, 881, [[_record(3, VIDEO_URL)]]]))],
+            poll_timeout_s=0.5,
+        )
+    assert "unreadable" in ei.value.detail and f"/project/{PROJ}" in ei.value.detail
+    assert not is_retryable(ei.value)
+
+
+async def test_with_no_status_match_the_listing_in_a_second_tab_adopts_1112(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Row 8: the polls after the loss never named our clip (their bodies lost too). The
+    project listing, read in a tab opened after the submit, still holds it."""
+    from gflow_cli.api.transports import migrated_composer as mc
+
+    monkeypatch.setattr(mc, "SUBMIT_REPLY_BUDGET_S", 0.2)
+    tab = ListingTab(_frame("Zzl0ze", [[[_record(3, VIDEO_URL)], [_ours(3, VIDEO_URL)]]]))
+    rec, started = await _observe_lost(
+        [(_batch_url("jwpduf"), LOST_BODY)], poll_timeout_s=2.0, tab=tab
+    )
+    assert rec.workflow_id == WF_OURS and rec.is_done and rec.video_url == VIDEO_URL
+    assert len(started) == 1
+    assert tab.gotos == [mc.MIGRATED_PROJECT_URL.format(project_id=PROJ)] and tab.closed
+
+
+async def test_a_failed_listing_tab_still_ends_in_the_named_exit_9_1112(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Playwright's TimeoutError is not the builtin one, and a navigation can fail with
+    net::ERR_*: either must leave the fallback empty, not replace the exit 9 that names
+    the project with a raw browser error on an already-billed run."""
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    from gflow_cli.api.transports import migrated_composer as mc
+    from gflow_cli.errors import TransportTimeoutError
+
+    monkeypatch.setattr(mc, "SUBMIT_REPLY_BUDGET_S", 0.2)
+    tab = ListingTab(None, goto_error=PlaywrightTimeoutError("Page.goto: Timeout exceeded"))
+    with pytest.raises(TransportTimeoutError) as ei:
+        await _observe_lost([], poll_timeout_s=0.5, tab=tab)
+    assert "unreadable" in ei.value.detail and tab.closed
+
+
+async def test_a_lost_interpolation_submit_reply_is_followed_too_1112() -> None:
+    """A start+end submit (nprQif) answers on a bare batchexecute URL with no rpcids
+    param, so its lost body is tied to the submit through the request it answers."""
+    from gflow_cli.api.transports.migrated_composer import MigratedComposer
+
+    page = FakePage()
+    page.dom.prompt = "a crane"
+    page.scripted_request = (None, _interp_body())
+    page.scripted_responses = [
+        (_batch_bare_url(), LOST_BODY),
+        (_batch_url("as29s"), _frame("as29s", _ours(3, VIDEO_URL))),
+    ]
+    started: list[Any] = []
+    with capture_logs() as logs:
+        rec = await MigratedComposer().submit_and_observe(
+            page,
+            poll_timeout_s=2.0,
+            on_started=started.append,
+            project_id=PROJ,
+            expect_media_id=MEDIA_UP,
+            expect_end_media_id=END_UP,
+            adopt_ids=(MEDIA_UP, END_UP),
+        )
+    assert rec.workflow_id == WF_OURS and rec.is_done and len(started) == 1
+    lost = [e for e in logs if e["event"] == "migrated.video_submit_reply_lost"]
+    assert [e["rpc"] for e in lost] == ["nprQif"]
+    # Row 12: the submit body (it carries the reCAPTCHA token on the wire) is never logged.
+    assert not any("f.req" in str(e) or "a prompt" in str(e) for e in logs)
+
+
+async def test_a_lost_status_body_is_skipped_and_the_next_poll_adopts_1112() -> None:
+    rec, _ = await _observe_lost(
+        [
+            (_batch_url("jwpduf"), LOST_BODY),
+            (_batch_url("as29s"), _frame("as29s", _ours(3, VIDEO_URL))),
+        ]
+    )
+    assert rec.workflow_id == WF_OURS and rec.is_done
 
 
 async def test_a_generation_not_terminal_in_time_is_not_retryable() -> None:

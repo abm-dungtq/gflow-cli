@@ -31,6 +31,7 @@ matched with a Python-side ``filter(has_text=re.compile(...))`` instead.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import mimetypes
 import re
@@ -43,6 +44,7 @@ from urllib.parse import unquote_plus, urlsplit
 from uuid import uuid4
 
 import structlog
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from gflow_cli.api.dto import CreditsInfo, GeneratedImage, ProjectInfo
@@ -61,6 +63,7 @@ from gflow_cli.api.transports._common import (
 from gflow_cli.api.transports.batchexecute import (
     GenerationRecord,
     generation_record,
+    generation_records_carrying,
     image_records,
     parse_frames,
     rpc_errors,
@@ -108,6 +111,8 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)
 
 MIGRATED_PROJECT_URL = "https://flow.google.com/project/{project_id}"
+#: The project listing the app reads on load: every clip, with the request that made it.
+LISTING_RPC = "Zzl0ze"
 READY_ANCHOR = ".settings-trigger-button"
 OVERLAY = ".cdk-overlay-pane"
 #: Playwright's own visibility engine — the detached overlays Angular leaves behind are
@@ -461,6 +466,8 @@ SUBMIT_BUTTON = "the submit button (ligature 'arrow_forward')"
 
 #: The submit reply arrived 4.0–4.6 s after the click in both measured runs.
 SUBMIT_REPLY_BUDGET_S = 60.0
+#: How long the lost-reply fallback waits for the project listing in its second tab.
+LISTING_READ_BUDGET_S = 30.0
 # Angular enables the arrow_forward button ~100 ms after `insert_text` lands in the
 # composer (measured 2026-09-05, #670); checking it synchronously reads the stale state.
 SUBMIT_ENABLE_BUDGET_S = 5.0
@@ -581,7 +588,7 @@ def _unported_form(request: GenerateVideoRequest) -> str | None:
     2026-09-15 (scripts/dev/spike_migrated_end_frame.py): two empty chips, Start
     and End by text, and clicking the End chip opens the library picker."""
     # Character entities are a different attach surface (a chip with an entity_id, in a
-    # different wire slot) and unported. This check is MODE-INDEPENDENT and must stay
+    # different wire slot), ported for r2v only. This check is MODE-INDEPENDENT and must stay
     # ahead of every early return (#716): it used to live inside the R2V branch, so a
     # t2v request returned `None` here without its entities ever being inspected, and
     # nothing downstream attaches one — `attach_start_frame` is i2v-only,
@@ -593,43 +600,18 @@ def _unported_form(request: GenerateVideoRequest) -> str | None:
     # `prefer_migrated`, and an account Flow has already moved is routed by its URL
     # without consulting it — so that refusal is unreachable for exactly the accounts
     # that need it. This one is on the path every request takes.
-    if request.reference_entities:
-        # STILL REFUSED — but NOT because the backend rejects it. The port is half done
-        # in a narrower way than previously recorded here (#723).
-        #
-        # What works: `attach_character_entities` drives the `@` picker, commits the
-        # chip, and verifies it carries data-reference-type="entity" with the requested
-        # id. `migrated.character_entities_attached` fires and Flow loads the
-        # character's voice sample. And the SUBMIT IS ACCEPTED: measured 2026-09-07,
-        # entity-bound submissions appear in Flow's own gallery as **Queued** and
-        # proceed. Nothing is refused server-side.
-        #
-        # What breaks is the OBSERVER, and the mechanism is exact:
-        #
-        #   MZZa6b -> [["wrb.fr","MZZa6b",null,null,null,[5],"generic"]]
-        #
-        # The submit reply carries a NULL payload, so it never names a media id and the
-        # `submitted` future in submit_and_observe never resolves. That wait is bounded
-        # by SUBMIT_REPLY_BUDGET_S (60 s), a value calibrated on runs where "the submit
-        # reply arrived 4.0-4.6 s after the click" — i.e. a plate-based generation
-        # against an idle queue. So the run times out (exit 9, TransportTimeoutError)
-        # while the job sits in Flow's queue and completes on its own.
-        #
-        # This is also what the ORIGINAL note here described as "the submit never
-        # produces a reply, three runs, 60 s each, cause unknown". Three timeouts
-        # against a queue, read as a refusal. Two later comments (including one of
-        # mine) hardened that misreading further; both were wrong.
-        #
-        # Queue latency is not incidental: Flow documents a limit of FIVE concurrent
-        # generations, and rate-limits per-minute throughput after heavy daily use, so
-        # 60 s is routinely too short in real production.
-        #
-        # THE FIX, when someone takes it: on a null submit payload, fall through to the
-        # status poll (jwpduf/as29s) keyed on the project instead of requiring the
-        # submit reply to name the media id, and make the budget configurable. The guard
-        # stays only until that lands, because today the CLI would report a timeout on a
-        # generation that is actually running — worse than an honest refusal.
+    if request.reference_entities and request.mode is not Mode.R2V:
         return "character references"
+    if len(request.reference_entities) > len(request.reference_entity_names):
+        # Attached by name through the `@` picker; an id alone has nothing to type, and
+        # would otherwise fail later as a confusing chip-count mismatch.
+        return "a character given by entity id without a name"
+    # R2V serves characters (#723): `run_video` attaches them through the `@` picker
+    # and `read_chips` verifies each entity chip before the billed click. The earlier
+    # refusal rested on a null submit reply (`MZZa6b -> [..., [5], "generic"]`,
+    # measured 2026-09-07) that no longer reproduces: on 2026-10-26 an entity-bound
+    # r2v run went end to end through the stock observer (exit 0). If that reply
+    # comes back, the run ends as an honest unknown outcome (exit 9), not a guess.
     if request.mode is Mode.T2V:
         return None
     if request.mode is Mode.R2V:
@@ -1192,7 +1174,7 @@ def _r2v_body_problem(body: str, rpcid: str, media_ids: tuple[str, ...]) -> str 
         other = [u for u in UUID_RE.findall(body) if u.lower() not in known]
         return (
             f"migrated host: the {rpcid} submit body is missing {len(missing)} of "
-            f"{len(media_ids)} uploaded reference(s) ({', '.join(missing[:3])}; ids in the "
+            f"{len(media_ids)} reference(s) ({', '.join(missing[:3])}; ids in the "
             f"body: {', '.join(other[:4]) or 'none'}) — the picker bound different assets"
         )
     return None
@@ -2993,6 +2975,7 @@ class MigratedComposer:
         submit_rpcs: tuple[str, ...] = SUBMIT_RPCS,
         submit_selector: str | None = None,
         request_check: Callable[[str, str], GFlowError | None] | None = None,
+        adopt_ids: tuple[str, ...] = (),
     ) -> GenerationRecord:
         """Click submit, then read the page's own submit / ``jwpduf`` / ``as29s``
         replies until the record is terminal. Fires ``on_started`` as soon as the
@@ -3008,10 +2991,17 @@ class MigratedComposer:
         generation the user asked for is not the one Flow is billing. A bound end
         frame (``expect_end_media_id``) switches the submit to the interpolation
         rpc (``nprQif``), whose name travels in the ``f.req`` body rather than the
-        URL; that body must carry the interpolation key and both frame ids."""
+        URL; that body must carry the interpolation key and both frame ids.
+
+        ``adopt_ids`` are media ids this run uploaded. When Chrome loses the submit reply
+        body (#1112), the status poll whose record carries one of them is adopted as the
+        submit; each upload is a run-unique copy (18 of 18 distinct reference ids in the
+        2026-10-27 spike), so an older clip does not carry it."""
         loop = asyncio.get_running_loop()
         submitted: asyncio.Future[GenerationRecord] = loop.create_future()
         route_error: asyncio.Future[GFlowError] = loop.create_future()
+        # (request, rpcid) of each submit sent, to place a reply that names no rpcid.
+        submit_requests: list[tuple[Any, str]] = []
 
         def on_request(request: Any) -> None:
             url = str(getattr(request, "url", ""))
@@ -3036,6 +3026,7 @@ class MigratedComposer:
                     route_error.set_result(verdict)
                     return
             if rpcid in submit_rpcs:
+                submit_requests.append((request, rpcid))
                 if rpcid == INTERPOLATION_SUBMIT_RPC:
                     problem = _interpolation_body_problem(
                         body, rpcid, expect_media_id, expect_end_media_id
@@ -3075,6 +3066,8 @@ class MigratedComposer:
         terminal: asyncio.Future[GenerationRecord] = loop.create_future()
         done_no_url: asyncio.Future[GenerationRecord] = loop.create_future()
         workflow: dict[str, str] = {}
+        # The submit rpc whose reply body was lost, while a status poll may still name it.
+        lost: dict[str, str] = {}
 
         def _settle(rec: GenerationRecord) -> None:
             if rec.is_failed or (rec.is_done and rec.video_url):
@@ -3082,6 +3075,33 @@ class MigratedComposer:
                     terminal.set_result(rec)
             elif rec.is_done and not done_no_url.done():
                 done_no_url.set_result(rec)
+
+        def _adopt(rid: str, payload: Any) -> None:
+            carrying = generation_records_carrying(rid, payload, adopt_ids)
+            matches = {r.workflow_id: r for r in carrying}
+            if len(matches) > 1:
+                ids = ", ".join(sorted(r.media_id for r in matches.values()))
+                log.warning("migrated.video_recovery_ambiguous", rpc=rid, media_ids=ids)
+                submitted.set_exception(
+                    _outcome_unknown(
+                        f"migrated host: the {lost['rpc']} submit reply body was lost and "
+                        f"{len(matches)} clips carry this run's upload ({ids})"
+                    )
+                )
+            elif matches:
+                (rec,) = matches.values()
+                workflow["id"] = rec.workflow_id
+                log.info(
+                    "migrated.video_adopted_from_listing"
+                    if rid == LISTING_RPC
+                    else "migrated.video_adopted_from_status",
+                    rpc=rid,
+                    workflow_id=rec.workflow_id,
+                    media_id=rec.media_id,
+                    status=rec.status,
+                )
+                submitted.set_result(rec)
+                _settle(rec)
 
         # Every batchexecute rpcid seen while waiting for the submit reply. A
         # start+end submit may answer on an rpcid this observer does not watch;
@@ -3106,10 +3126,26 @@ class MigratedComposer:
             except Exception:  # noqa: BLE001 - an aborted/streamed body is not our frame
                 # #1009/#1010: Chrome can drop a reply body. On the submit reply that
                 # loses the workflow id, so no status reply can settle the run either.
-                if rpcid in submit_rpcs and not submitted.done():
+                # nprQif answers on a bare URL: tie it to the submit by its request.
+                sent = getattr(response, "request", None)
+                sub = (
+                    rpcid
+                    if rpcid in submit_rpcs
+                    else next((r for q, r in submit_requests if q is sent), None)
+                )
+                if sub is None or submitted.done():
+                    return
+                if adopt_ids:
+                    lost["rpc"] = sub
+                    log.warning(
+                        "migrated.video_submit_reply_lost",
+                        rpc=sub,
+                        note="submit reply lost; following the clip in the project, no re-submit",
+                    )
+                else:
                     submitted.set_exception(
                         _outcome_unknown(
-                            f"migrated host: the {rpcid} submit reply arrived but its "
+                            f"migrated host: the {sub} submit reply arrived but its "
                             "body was unreadable"
                         )
                     )
@@ -3142,6 +3178,8 @@ class MigratedComposer:
                     )
                     submitted.set_result(rec)
                     _settle(rec)
+                elif rid in STATUS_RPCS and lost and not workflow and not submitted.done():
+                    _adopt(rid, payload)
                 elif rid in STATUS_RPCS and workflow:
                     try:
                         rec = generation_record(rid, payload, workflow_id=workflow["id"])
@@ -3201,10 +3239,34 @@ class MigratedComposer:
             await asyncio.wait(
                 {submitted, route_error}, timeout=budget, return_when=asyncio.FIRST_COMPLETED
             )
+            if lost and not submitted.done() and not route_error.done() and project_id:
+                # No poll named it (their bodies can be lost too): the project listing,
+                # read in a tab opened only now, after the upload's file chooser is done.
+                listing = await self._read_listing(
+                    page,
+                    project_id,
+                    budget_s=max(0.0, min(LISTING_READ_BUDGET_S, deadline - time.monotonic())),
+                )
+                if listing is not None and not submitted.done():
+                    _adopt(LISTING_RPC, listing)
+            if lost and not submitted.done() and not route_error.done():
+                # The clip is being made; a status poll may still name it before the deadline.
+                await asyncio.wait(
+                    {submitted, route_error},
+                    timeout=max(0.0, deadline - time.monotonic()),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
             if route_error.done():
                 # The request is inspected before its reply lands, so a wrong body is
                 # named as such and not as whatever the reply then says.
                 raise route_error.result()
+            if not submitted.done() and lost:
+                where = MIGRATED_PROJECT_URL.format(project_id=project_id) if project_id else "Flow"
+                raise _outcome_unknown(
+                    f"migrated host: the {lost['rpc']} submit reply arrived but its body was "
+                    f"unreadable, and no status reply named a clip carrying this run's upload "
+                    f"within {poll_timeout_s:.0f}s; it may still finish in {where}"
+                )
             if not submitted.done():
                 seen = ", ".join(sorted(seen_submit_rpcs)) or "none"
                 raise _outcome_unknown(
@@ -3241,6 +3303,47 @@ class MigratedComposer:
                 submitted.exception()
             page.remove_listener("response", on_response)
             page.remove_listener("request", on_request)
+
+    async def _read_listing(self, page: Page, project_id: str, *, budget_s: float) -> Any | None:
+        """The project's ``Zzl0ze`` payload, read in a second tab; ``None`` if none came.
+
+        A second tab, because the generating page must not navigate mid-generation, and
+        its own first-load listing was not observed to answer (spike 2026-10-27)."""
+        got: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+
+        async def on_response(response: Any) -> None:
+            if got.done() or LISTING_RPC not in str(getattr(response, "url", "")):
+                return
+            try:
+                text = await response.text()
+            except Exception:  # noqa: BLE001 - a lost body leaves the fallback empty
+                return
+            for rid, payload in parse_frames(text):
+                if rid == LISTING_RPC and not got.done():
+                    got.set_result(payload)
+
+        end = time.monotonic() + budget_s
+        tab: Page | None = None
+        try:
+            tab = await page.context.new_page()
+            tab.on("response", on_response)
+            await tab.goto(
+                MIGRATED_PROJECT_URL.format(project_id=project_id),
+                wait_until="domcontentloaded",
+                timeout=budget_s * 1000,
+            )
+            return await asyncio.wait_for(got, max(0.0, end - time.monotonic()))
+        # Playwright's TimeoutError is not the builtin one. Any failure here leaves the
+        # caller's exit 9, which names the project; this runs after Flow has billed.
+        except (TimeoutError, PlaywrightError) as exc:
+            log.warning(
+                "migrated.video_listing_unanswered", budget_s=budget_s, error=type(exc).__name__
+            )
+            return None
+        finally:
+            if tab is not None:
+                with contextlib.suppress(PlaywrightError):
+                    await tab.close()
 
     async def _verify_submit_target(self, page: Page, submit: Locator) -> None:
         """Prove the submit button is visible and receives pointer events."""
@@ -3703,6 +3806,7 @@ async def run_video(
     media_id: str | None = None
     end_media_id: str | None = None
     reference_ids: tuple[str, ...] = ()
+    entity_ids: tuple[str, ...] = ()
     frame = request.start_image
     if request.mode is Mode.I2V and frame is not None:
         media_id = await composer.attach_start_frame(page, pid, frame)
@@ -3714,7 +3818,7 @@ async def run_video(
         # #723: characters attach through the SAME `@` picker as media, so they go on
         # after any uploads (whose file chooser steals keyboard focus) and must not clear
         # mentions those uploads already placed.
-        await composer.attach_character_entities(
+        entity_ids = await composer.attach_character_entities(
             page,
             entity_ids=tuple(request.reference_entities),
             names=tuple(request.reference_entity_names),
@@ -3743,7 +3847,12 @@ async def run_video(
         project_id=pid,
         expect_media_id=media_id,
         expect_end_media_id=end_media_id,
-        expect_reference_ids=reference_ids,
+        # The committed entity ids ride the MZZa6b body beside the media ids (route-abort
+        # capture, 2026-10-27), so a character-only run is guarded too.
+        expect_reference_ids=reference_ids + entity_ids,
+        # Only ids uploaded by THIS run identify its clip after a lost reply (#1112);
+        # a character's entity id repeats in every clip that cast it.
+        adopt_ids=tuple(i for i in (media_id, end_media_id) if i) + reference_ids,
     )
     status = VideoStatus(
         media_id=record.media_id,
